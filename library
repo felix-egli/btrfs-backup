@@ -1,0 +1,25 @@
+
+function title()
+{
+  echo "---------------------------------------"
+  echo "$1"
+  echo "---------------------------------------"
+}
+
+function start()
+{
+  trap '
+    rc=$?
+    echo "---------------------------------------"
+    if [ $rc -eq 0 ]; then
+      echo "$(date) - ok ($SECONDS)"
+    else
+      echo "$(date) - failed with rc=$rc ($SECONDS)"
+    fi
+    echo "---------------------------------------"
+    test "'${2:-}'" && '${2:-true}'
+  ' EXIT
+  title "$1"
+  echo "$(date) - start"
+  SECONDS=0
+}

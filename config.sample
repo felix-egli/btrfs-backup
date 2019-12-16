@@ -1,0 +1,14 @@
+#!/bin/bash
+
+SYSTEM='foo.bar.net'
+NAME='foo'
+
+##
+# home of the raw image and the lockfile
+#
+BASE_DIR="/backup/systems/$NAME"
+
+##
+# home of the qcow2 images
+#
+IMAGES_DIR='/backup/images'
