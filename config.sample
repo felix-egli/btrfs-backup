@@ -12,3 +12,9 @@ BASE_DIR="/backup/systems/$NAME"
 # home of the qcow2 images
 #
 IMAGES_DIR='/backup/images'
+
+##
+# mail adresses
+#
+MAIL_FROM='foo@bar.net'
+MAIL_TO=$MAIL_FROM
