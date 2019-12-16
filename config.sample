@@ -14,7 +14,7 @@ BASE_DIR="/backup/systems/$NAME"
 IMAGES_DIR='/backup/images'
 
 ##
-# mail adresses
+# mail addresses
 #
 MAIL_FROM='foo@bar.net'
 MAIL_TO=$MAIL_FROM
