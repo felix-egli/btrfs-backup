@@ -232,35 +232,43 @@ function convert_()
 
   run mount ${NBD}p2 $MP -o subvolid=5,compress=zlib:9
 
-  pushd $MP
+  cd $MP
 
-  test -d @ && run btrfs sub delete @
+  test -d @ && btrfs sub delete @
 
-  pushd snapshots
-  snap=$(ls -d *.*.*-*.* | tail -n1)
-  run btrfs prop set $snap ro false
-  run btrfs sub snap $snap ../@
-  run btrfs prop set $snap ro true
-  popd
+  ##
+  # create a snapshot of the last shapshot in @
+  #
+  snap=$(cd snapshots && ls -d *.*.*-*.* | tail -n1)
+  btrfs prop set snapshots/$snap ro false
+  btrfs sub snap snapshots/$snap @
+  btrfs prop set snapshots/$snap ro true
 
-  run btrfs subvolume set-default @
+  btrfs subvolume set-default @
 
-  test -d @backup || run btrfs sub create @backup
+  test -d @backup || btrfs sub create @backup
 
   test -d @swap || {
-    run btrfs sub create @swap
+    btrfs sub create @swap
     chattr +C @swap
     btrfs property set @swap compression none
   }
 
   cd @
 
+  ##
+  # make sure that files in boot are compressed with zlib
+  # grub < 2.04 does not understand zstd
+  #
   # btrfs filesystem defragment -r -f -czlib boot
   find boot -xdev -type d -exec btrfs prop set '{}' compression zlib ';'
 
+  ##
+  # disable swap
+  #
   sed -i 's:^\(/swap/.*\):# \1:' etc/fstab
 
-  popd
+  cd $HOME
 
   run umount ${NBD}p2
   run qemu-nbd -d $NBD && NBD=''
