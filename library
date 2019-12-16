@@ -8,6 +8,8 @@ function title()
 
 function start()
 {
+  local epilogue=${2:-}
+
   trap '
     rc=$?
     echo "---------------------------------------"
@@ -17,7 +19,7 @@ function start()
       echo "$(date) - failed with rc=$rc ($SECONDS)"
     fi
     echo "---------------------------------------"
-    test "'${2:-}'" && '${2:-true}'
+    test "'$epilogue'" && '${epilogue:-true}'
   ' EXIT
   title "$1"
   echo "$(date) - start"
