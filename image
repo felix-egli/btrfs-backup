@@ -1,0 +1,289 @@
+#!/bin/bash
+
+set -eu
+
+SCRIPT_DIR=$(cd $(dirname $0) && pwd)
+source $SCRIPT_DIR/config
+source $SCRIPT_DIR/library
+
+IMAGE_DIR="$BASE_DIR/image"
+IMAGE="$IMAGE_DIR/${NAME}.btrfs.raw"
+
+PATH=/usr/local/bin:$PATH
+
+MP=$(mktemp -d)
+TMP=$(mktemp)
+DEV=''
+NBD=''
+
+COMPRESS='gz'
+
+export PATH=/sbin:/usr/sbin:$PATH
+
+LANG=C
+
+function run()
+{
+  logger -p kern.debug -- "$@"
+  echo "$@"
+  $@
+}
+
+function epilogue()
+{
+  rc=$?
+
+  set +eu
+
+  cd $HOME
+
+  rm $TMP
+
+  test "$DEV" && {
+    mount | egrep $MP && umount $MP
+    losetup -d ${DEV}
+  }
+
+  rmdir $MP
+
+  test "$NBD" && {
+    mount | egrep ${NBD}p2 && umount ${NBD}p2
+    qemu-nbd -d ${NBD}
+  }
+
+  test -t 0 || mail "$NAME image backup ($rc)" < $SCRIPT_DIR/image.out
+
+  exit $rc
+}
+
+function get_nbd()
+{
+  local size nbd
+
+  modprobe nbd
+
+  (
+    cd /sys/devices/virtual/block/
+    for nbd in $(ls -d nbd*) ; do
+      size=$(cat $nbd/size)
+      test $size -eq 0 && break
+    done
+
+    echo "/dev/$nbd"
+  )
+}
+
+function lo_mount()
+{
+  DEV=$(losetup --partscan --find --show $IMAGE)
+  run mount ${DEV}p2 $@
+}
+
+function lo_umount()
+{
+  run umount $@
+  run losetup -d ${DEV}
+  DEV=''
+}
+
+function remove_()
+{
+  test -f $IMAGE && rm $IMAGE
+}
+
+function init_()
+{
+  test -f $IMAGE && {
+    >&2 echo "The image '$IMAGE' already exists."
+    exit 1
+  }
+
+  ##
+  # get size
+  #
+  ssh $SYSTEM 'fdisk -l /dev/sda' > $TMP
+  set -- $(grep '^Disk .* bytes, .* sectors' $TMP)
+  bytes=$5
+
+  ##
+  # create image
+  #
+  truncate -s $bytes $IMAGE
+
+  ##
+  # install MBR
+  #
+  # ssh $SYSTEM 'dd if=/dev/sda bs=512 count=2048' > $TMP
+  # run dd if=$TMP of=$IMAGE bs=512 conv=notrunc
+  # run sgdisk --clear $IMAGE > /dev/null 2>&1
+  # udevadm settle; sync
+
+  ##
+  # clone partition table
+  #
+  ssh $SYSTEM 'bkup=$(mktemp) && sgdisk --backup=$bkup /dev/sda >/dev/null 2>&1 && cat $bkup' > $TMP
+  run sgdisk --load-backup=$TMP $IMAGE > /dev/null
+
+  # fdisk -l $IMAGE
+
+  ##
+  # create loopback device
+  #
+  DEV=$(losetup --partscan --find --show $IMAGE)
+
+  ##
+  # clone part 1
+  #
+  ssh $SYSTEM 'dd if=/dev/sda1 bs=512' > $TMP
+  run dd if=$TMP of=${DEV}p1 bs=512
+
+  ##
+  # get fsid and label
+  #
+  ssh $SYSTEM 'btrfs inspect-internal dump-super /dev/sda2' > $TMP
+  set -- $(egrep '^fsid[[:blank:]]+' $TMP)
+  UUID=$2
+  set -- $(egrep '^label[[:blank:]]+' $TMP)
+  LABEL=$2
+
+  ##
+  # create fs
+  #
+  run mkfs.btrfs -U $UUID -L $LABEL ${DEV}p2
+
+  ##
+  # detach loopback
+  #
+  run losetup -d ${DEV}
+  DEV=''
+}
+
+function fullbackup_()
+{
+  SNAP=$(date +%Y.%m.%d-%H.%M)
+
+  lo_mount $MP -o compress=zlib:9
+
+  test -d $MP/snapshots || mkdir $MP/snapshots
+
+  ssh $SYSTEM "
+    set -eu
+    btrfs subvolume snapshot -r / /.btrfs/snapshots/$SNAP >&2
+    btrfs send /.btrfs/snapshots/$SNAP | pi$COMPRESS
+  " | pi$COMPRESS -d | btrfs receive $MP/snapshots
+
+  lo_umount $MP
+}
+
+function backup_()
+{
+  SNAP=$(date +%Y.%m.%d-%H.%M)
+
+  lo_mount $MP -o compress=zlib:9
+
+  cd $MP/snapshots
+  for dir in $(ls -d *.*.*-*.*) ; do
+    test $(btrfs prop get $dir ro) == 'ro=true' && PARENT=$dir
+  done
+  cd -
+
+  test -d $MP/snapshots/new || mkdir -p $MP/snapshots/new
+
+  ssh $SYSTEM "
+    set -eu
+    btrfs subvolume snapshot -r / /.btrfs/snapshots/$SNAP >&2
+    btrfs send -p /.btrfs/snapshots/$PARENT /.btrfs/snapshots/$SNAP | pi$COMPRESS
+  " | pi$COMPRESS -d | btrfs receive $MP/snapshots/new
+  
+  ##
+  # move snapshot
+  #
+  run btrfs prop set $MP/snapshots/new/$SNAP ro false
+  run mv $MP/snapshots/new/$SNAP $MP/snapshots/$SNAP
+  run btrfs prop set $MP/snapshots/$SNAP ro true
+
+  ##
+  # reorg
+  #
+  cp $SCRIPT_DIR/reorg $MP/snapshots/reorg
+  run $MP/snapshots/reorg
+
+  lo_umount $MP
+}
+
+function mount_()
+{
+  lo_mount $MP -o compress=zlib:9
+  cd $MP
+  bash
+  cd $HOME
+  lo_umount $MP
+}
+
+function convert_()
+{
+  run qemu-img convert -O qcow2 $IMAGE $IMAGES_DIR/${NAME}.qcow2
+
+  NBD=$(get_nbd)
+
+  run qemu-nbd -c ${NBD} $IMAGES_DIR/${NAME}.qcow2
+
+  udevadm settle; sync
+
+  run mount ${NBD}p2 $MP -o subvolid=5,compress=zlib:9
+
+  pushd $MP
+
+  test -d @ && run btrfs sub delete @
+
+  pushd snapshots
+  snap=$(ls -d *.*.*-*.* | tail -n1)
+  run btrfs prop set $snap ro false
+  run btrfs sub snap $snap ../@
+  run btrfs prop set $snap ro true
+  popd
+
+  run btrfs subvolume set-default @
+
+  test -d @backup || run btrfs sub create @backup
+
+  test -d @swap || {
+    run btrfs sub create @swap
+    chattr +C @swap
+    btrfs property set @swap compression none
+  }
+
+  cd @
+
+  # btrfs filesystem defragment -r -f -czlib boot
+  find boot -xdev -type d -exec btrfs prop set '{}' compression zlib ';'
+
+  sed -i 's:^\(/swap/.*\):# \1:' etc/fstab
+
+  popd
+
+  run umount ${NBD}p2
+  run qemu-nbd -d $NBD && NBD=''
+}
+
+
+(
+  flock -n 9 || {
+    >&2 echo "$IMAGE_DIR/.lockfile is locked."
+    exit 1
+  }
+
+  if [ ! -t 0 ]; then 
+    exec > $SCRIPT_DIR/image.out 2>&1
+  fi
+
+  start "image $@" epilogue
+
+  for cmd in $@; do
+    title "$(date) - $cmd"
+    ${cmd}_
+  done
+
+) 9> $IMAGE_DIR/.lockfile
+
+exit 0
