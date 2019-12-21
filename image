@@ -17,6 +17,7 @@ DEV=''
 NBD=''
 
 COMPRESS='gz'
+SEND_MAIL=0
 
 export PATH=/sbin:/usr/sbin:$PATH
 
@@ -51,7 +52,9 @@ function epilogue()
     qemu-nbd -d ${NBD}
   }
 
-  test -t 0 || mail "$NAME $PARAMETERS ($rc)" < $SCRIPT_DIR/image.out
+  if [ $rc -ne 0 ] || [ $SEND_MAIL -ne 0 ]; then
+    test -t 0 || mail "$NAME $PARAMETERS ($rc)" < $SCRIPT_DIR/image.out
+  fi
 
   exit $rc
 }
@@ -206,7 +209,7 @@ function backup_()
   ssh $SYSTEM "
     set -eu
     btrfs subvolume snapshot -r / /.btrfs/snapshots/$SNAP >&2
-    btrfs-sub-diff /.btrfs/snapshots/$PARENT /.btrfs/snapshots/$SNAP >&2 || true
+    # btrfs-sub-diff /.btrfs/snapshots/$PARENT /.btrfs/snapshots/$SNAP >&2 || true
     btrfs send -p /.btrfs/snapshots/$PARENT /.btrfs/snapshots/$SNAP | pi$COMPRESS
   " | pi$COMPRESS -d | btrfs receive $MP/snapshots/new
   
@@ -299,6 +302,7 @@ function list_()
       echo "$(ls -lh $file) - $1"
     }
   done
+  SEND_MAIL=1
 }
 
 (
