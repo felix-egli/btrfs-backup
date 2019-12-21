@@ -73,6 +73,20 @@ function get_nbd()
   )
 }
 
+function nbd_mount()
+{
+  NBD=$(get_nbd)
+  run qemu-nbd -c ${NBD} $IMAGES_DIR/${NAME}.qcow2
+  run mount ${NBD}p2 $@
+}
+
+function nbd_umount()
+{
+  run umount $@
+  run qemu-nbd -d ${NBD}
+  NBD=''
+}
+
 function lo_mount()
 {
   DEV=$(losetup --partscan --find --show $IMAGE)
@@ -192,6 +206,7 @@ function backup_()
   ssh $SYSTEM "
     set -eu
     btrfs subvolume snapshot -r / /.btrfs/snapshots/$SNAP >&2
+    btrfs-sub-diff /.btrfs/snapshots/$PARENT /.btrfs/snapshots/$SNAP >&2 || true
     btrfs send -p /.btrfs/snapshots/$PARENT /.btrfs/snapshots/$SNAP | pi$COMPRESS
   " | pi$COMPRESS -d | btrfs receive $MP/snapshots/new
   
@@ -211,26 +226,29 @@ function backup_()
   lo_umount $MP
 }
 
-function mount_()
+function mount_raw_()
 {
-  lo_mount $MP -o compress=zlib:9
+  lo_mount $MP -o compress=zlib:9,subvolid=5
   cd $MP
   bash
   cd $HOME
   lo_umount $MP
 }
 
+function mount_qcow2_()
+{
+  nbd_mount $MP -o compress=zlib:9,subvolid=5
+  cd $MP
+  bash
+  cd $HOME
+  nbd_umount $MP
+}
+
 function convert_()
 {
   run qemu-img convert -O qcow2 $IMAGE $IMAGES_DIR/${NAME}.qcow2
 
-  NBD=$(get_nbd)
-
-  run qemu-nbd -c ${NBD} $IMAGES_DIR/${NAME}.qcow2
-
-  udevadm settle; sync
-
-  run mount ${NBD}p2 $MP -o subvolid=5,compress=zlib:9
+  nbd_mount $MP -o compress=zlib:9,subvolid=5
 
   cd $MP
 
@@ -270,8 +288,7 @@ function convert_()
 
   cd $HOME
 
-  run umount ${NBD}p2
-  run qemu-nbd -d $NBD && NBD=''
+  nbd_umount $MP
 }
 
 function list_()
@@ -283,7 +300,6 @@ function list_()
     }
   done
 }
-
 
 (
   flock -n 9 || {
