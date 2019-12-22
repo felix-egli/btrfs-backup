@@ -182,7 +182,7 @@ function init_()
 
 function fullbackup_()
 {
-  SNAP=$(date +%Y.%m.%d_%H.%M)
+  local SNAP=$(date +%Y.%m.%d_%H.%M)
 
   lo_mount $MP -o compress=zlib:9
 
@@ -232,6 +232,7 @@ function backup_()
   #
   cp $SCRIPT_DIR/reorg $MP/snapshots/reorg
   run $MP/snapshots/reorg
+  run fstrim -v $MP
 
   lo_umount $MP
 }
@@ -326,7 +327,8 @@ function convert_()
 
 function list_()
 {
-  for file in $IMAGE_RAW $IMAGE_QCOW2 ; do
+  cd $IMAGES_DIR
+  for file in ${NAME}.{raw,qcow2} ; do
     test -f $file && {
       set -- $(du -sh $file)
       echo "$(ls -lh $file) - $1"
