@@ -13,6 +13,8 @@ IMAGE_QCOW2="$IMAGES_DIR/${NAME}.qcow2"
 
 BTRFS_SEND_DIR="$BASE_DIR/btrfs-send"
 
+METADATA="$BASE_DIR/metadata.tar"
+
 PARAMETERS="$@"
 
 MP=$(mktemp -d)
@@ -113,6 +115,27 @@ function remove_()
   test -f $IMAGE_RAW && rm $IMAGE_RAW
 }
 
+function get_metadata_()
+{
+  local tmp=$(basename $TMP)
+
+  cd $(dirname $TMP)
+
+  ssh $SYSTEM 'LANG=C; fdisk -l /dev/sda' > $tmp
+  tar --file=$METADATA --create --transform="s:$tmp:fdisk-l:" $tmp
+
+  ssh $SYSTEM 'bkup=$(mktemp) && sgdisk --backup=$bkup /dev/sda >/dev/null 2>&1 && cat $bkup' > $tmp
+  tar --file=$METADATA --append --transform="s:$tmp:sgdisk-backup:" $tmp
+
+  ssh $SYSTEM 'dd if=/dev/sda1 bs=512' > $tmp
+  tar --file=$METADATA --append --transform="s:$tmp:part1-img:" $tmp
+
+  ssh $SYSTEM 'btrfs inspect-internal dump-super /dev/sda2' > $tmp
+  tar --file=$METADATA --append --transform="s:$tmp:super-dump:" $tmp
+
+  cd -
+}
+
 function init_()
 {
   test -f $IMAGE_RAW && {
@@ -120,11 +143,15 @@ function init_()
     exit 1
   }
 
+  get_metadata_
+
   ##
   # get size
   #
-  ssh $SYSTEM 'fdisk -l /dev/sda' > $TMP
-  set -- $(grep '^Disk .* bytes, .* sectors' $TMP)
+  set -- $(
+    tar --file=$METADATA --extract --to-stdout 'fdisk-l' \
+    | grep '^Disk .* bytes, .* sectors'
+  )
   bytes=$5
 
   ##
@@ -143,7 +170,7 @@ function init_()
   ##
   # clone partition table
   #
-  ssh $SYSTEM 'bkup=$(mktemp) && sgdisk --backup=$bkup /dev/sda >/dev/null 2>&1 && cat $bkup' > $TMP
+  tar --file=$METADATA --extract --to-stdout 'sgdisk-backup' > $TMP
   run sgdisk --load-backup=$TMP $IMAGE_RAW > /dev/null
 
   # fdisk -l $IMAGE_RAW
@@ -156,13 +183,13 @@ function init_()
   ##
   # clone part 1
   #
-  ssh $SYSTEM 'dd if=/dev/sda1 bs=512' > $TMP
+  tar --file=$METADATA --extract --to-stdout 'part1-img' > $TMP
   run dd if=$TMP of=${DEV}p1 bs=512
 
   ##
   # get fsid and label
   #
-  ssh $SYSTEM 'btrfs inspect-internal dump-super /dev/sda2' > $TMP
+  tar --file=$METADATA --extract --to-stdout 'super-dump' > $TMP
   set -- $(egrep '^fsid[[:blank:]]+' $TMP)
   UUID=$2
   set -- $(egrep '^label[[:blank:]]+' $TMP)
@@ -298,7 +325,9 @@ function convert_()
 
   btrfs subvolume set-default @
 
-  test -d @backup || btrfs sub create @backup
+  for sub in @backup @nobackup ; do
+    test -d $sub || btrfs sub create $sub
+  done
 
   test -d @swap || {
     btrfs sub create @swap
