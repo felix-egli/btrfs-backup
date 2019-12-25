@@ -227,7 +227,7 @@ function _backup()
       snapshots='/.btrfs/snapshots'
       btrfs subvolume snapshot -r / \$snapshots/$snap >&2
       btrfs send \$snapshots/$snap | pi$compress
-    " | pi$compress -d | btrfs receive $backup_dir/snapshots
+    " | nice -n19 pi$compress -d | nice -n19 btrfs receive $backup_dir/snapshots
 
   else
 
@@ -238,7 +238,7 @@ function _backup()
       snapshots='/.btrfs/snapshots'
       btrfs subvolume snapshot -r / \$snapshots/$snap >&2
       btrfs send -p \$snapshots/$parent \$snapshots/$snap | pi$compress
-    " | pi$compress -d | btrfs receive $backup_dir/snapshots/new
+    " | nice -n19 pi$compress -d | nice -n19 btrfs receive $backup_dir/snapshots/new
 
     ##
     # move snapshot
@@ -342,7 +342,7 @@ function _restore_backup()
   # restore latest snapshot
   #
   local latest=$(ls -d $backup_dir/snapshots/*.*.*_*.* | tail -n1)
-  btrfs send $latest | btrfs receive $mp/snapshots
+  nice -n19 btrfs send $latest | nice -n19 btrfs receive $mp/snapshots
 
   exit_pop
   exit_pop
@@ -361,7 +361,7 @@ function _convert()
 
   >&2 echo "converting $image_raw to $image_qcow"
 
-  qemu-img convert -O qcow2 $image_raw $tmp
+  nice -n19 qemu-img convert -O qcow2 $image_raw $tmp
   mv -f $tmp $image_qcow
 
   nbd_mount $image_qcow $mp -o compress=zlib:9,subvolid=5
@@ -482,23 +482,39 @@ function _retention()
   cd $OLDPWD
 }
 
+function _run()
+{
+  (
+    flock -n 9 || {
+      >&2 echo "$backup_dir/.lockfile is locked"
+      exit 1
+    }
+
+    for cmd in $@ ; do
+      >&2 echo "$(date) - $cmd"
+      _${cmd}
+    done
+
+  ) 9> $backup_dir/.lockfile
+}
+
 eval set -- "$PARAMETERS"
 
 while true ; do
   case "$1" in
   -B|--backup-dir) backup_dir=$2 ; shift 2 ;;
-  -H|--host) host=$2 ; shift 2 ;;
-  --latest) (( retention[latest] = $2 )) ; shift 2 ;;
-  --days) (( retention[days] = $2 )) ; shift 2 ;;
-  --weeks) (( retention[weeks] = $2 )) ; shift 2 ;;
-  --months) (( retention[months] = $2 )) ; shift 2 ;;
-  --years) (( retention[years] = $2 )) ; shift 2 ;;
-  -s|--setup) _check && _setup ; shift ;;
-  -b|--backup) _check && _backup ; shift ;;
-  -r|--retention) _check && _retention ; shift ;;
-  -i|--mkimage) _check && _mkimage ; shift ;;
-  --) shift ; break ;;
-  *) usage ;;
+  -H|--host)       host=$2 ; shift 2 ;;
+  --latest)        (( retention[latest] = $2 )) ; shift 2 ;;
+  --days)          (( retention[days] = $2 )) ; shift 2 ;;
+  --weeks)         (( retention[weeks] = $2 )) ; shift 2 ;;
+  --months)        (( retention[months] = $2 )) ; shift 2 ;;
+  --years)         (( retention[years] = $2 )) ; shift 2 ;;
+  -s|--setup)      _check && _run setup ; shift ;;
+  -b|--backup)     _check && _run backup ; shift ;;
+  -r|--retention)  _check && _run retention ; shift ;;
+  -i|--mkimage)    _check && _run mkimage ; shift ;;
+  --)              shift ; break ;;
+  *)               usage ;;
   esac
 done
 
