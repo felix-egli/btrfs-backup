@@ -157,14 +157,13 @@ function _check()
 
   image_raw="$backup_dir/images/image.raw"
   image_qcow="$backup_dir/images/image.qcow2"
+  metadata="$backup_dir/metadata.tar"
 }
 
 function _get_metadata()
 {
   local tmp=$(mktemp)
   exit_push "rm $tmp"
-
-  local metadata="$backup_dir/metadata.tar"
 
   >&2 echo "getting metadata from ${host}:"
 
@@ -187,9 +186,9 @@ function _get_metadata()
   ssh $host 'btrfs inspect-internal dump-super /dev/sda2' > $tmp
   tar --file=$metadata --append --transform="s:$tmp:super-dump:" $tmp
 
-  exit_pop
-
   cd $OLDPWD
+
+  exit_pop
 }
 
 function _setup()
@@ -252,9 +251,6 @@ function _backup()
 
 function _init_image()
 {
-  local dev
-  local metadata="$backup_dir/metadata.tar"
-
   local tmp=$(mktemp)
   exit_push "rm $tmp"
 
@@ -294,7 +290,7 @@ function _init_image()
   ##
   # create loopback device
   #
-  dev=$(losetup --partscan --find --show $image_raw_tmp)
+  local dev=$(losetup --partscan --find --show $image_raw_tmp)
   exit_push "losetup -d ${dev}"
 
   ##
