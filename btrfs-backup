@@ -1,0 +1,505 @@
+#!/bin/bash
+
+COMMAND=$0
+
+set -eu
+
+backup_dir=''
+host=''
+compress='gz'
+
+declare -A retention=(
+  [latest]=14
+  [days]=30
+  [weeks]=12
+  [months]=12
+  [years]=20
+)
+
+function usage()
+{
+  cat - <<EOF
+Usage: $COMMAND --backup-dir=DIR --host=HOST [optional] operation..
+
+Required:
+  --backup-dir=DIR    Directory where backups are saved.
+  --host=HOST         Host to backup.
+
+Optional:
+  --latest=COUNT      Number of latest snapshots to keep.
+  --days=DAYS         Number of days to keep.
+  --weeks=WEEKS       Number of weeks to keep.
+  --months=MONTHS     Number of months to keep.
+  --years=YEARS       Number of years to keep.
+
+Operation:
+  --setup             Setup the directory structure in the backup directory.
+  --backup            Perform a backup operation.
+  --retention         Perform a retention operation.
+  --mkimage           Create a QCOW2 image.
+
+
+Current parameters:
+
+host:       $host
+backup-dir: $backup_dir
+
+retention:
+$(
+for i in ${!retention[@]} ; do
+  printf '  %-9s %s\n' ${i}: ${retention[$i]}
+done
+)
+
+EOF
+  exit 1
+}
+
+function abort()
+{
+  >&2 echo ERROR: $@
+  trap - EXIT
+  exit 1
+}
+
+trap 'usage' EXIT
+
+test $# -gt 0
+
+PARAMETERS=$(
+  getopt -o hB:H:sbri \
+    --long help,backup-dir:,host:,setup,backup,retention,mkimage,latest:,days:,weeks:,months:,years: \
+    -n 'btbackup' -- "$@"
+)
+
+trap - EXIT
+
+
+declare -A exit_functions=()
+
+function exit_handler()
+{
+  local idx
+  for idx in ${!exit_functions[*]} ; do
+    eval "${exit_functions[$idx]}" || true
+  done
+}
+
+trap exit_handler EXIT
+
+function exit_push()
+{
+  local idx
+  idx=${#exit_functions[*]}
+  exit_functions[$idx]="$@"
+}
+
+function exit_pop()
+{
+  local idx
+  idx=${#exit_functions[*]}
+  (( idx-- ))
+  eval "${exit_functions[$idx]}"
+  unset exit_functions[$idx]
+}
+
+function get_nbd()
+{
+  local size nbd
+
+  modprobe nbd
+
+  (
+    cd /sys/devices/virtual/block/
+    for nbd in $(ls -d nbd*) ; do
+      size=$(cat $nbd/size)
+      test $size -eq 0 && break
+    done
+
+    echo "/dev/$nbd"
+  )
+}
+
+function nbd_mount()
+{
+  NBD=$(get_nbd)
+  qemu-nbd -c ${NBD} $1
+  shift
+  udevadm settle; sync
+  mount ${NBD}p2 $@
+}
+
+function nbd_umount()
+{
+  umount $@
+  qemu-nbd -d ${NBD}
+  NBD=''
+}
+
+function lo_mount()
+{
+  DEV=$(losetup --partscan --find --show $1)
+  shift
+  mount ${DEV}p2 $@
+}
+
+function lo_umount()
+{
+  umount $@
+  losetup -d ${DEV}
+  DEV=''
+}
+
+function _check()
+{
+  test "$backup_dir" || usage
+  test "$host" || usage
+
+  image_raw="$backup_dir/images/image.raw"
+  image_qcow="$backup_dir/images/image.qcow2"
+}
+
+function _get_metadata()
+{
+  local tmp=$(mktemp)
+  exit_push "rm $tmp"
+
+  local metadata="$backup_dir/metadata.tar"
+
+  >&2 echo "getting metadata from ${host}:"
+
+  cd $(dirname $tmp)
+  tmp=$(basename $tmp)
+
+  >&2 echo "- fdisk-l"
+  ssh $host 'LANG=C; fdisk -l /dev/sda' > $tmp
+  tar --file=$metadata --create --transform="s:$tmp:fdisk-l:" $tmp
+
+  >&2 echo "- sgdisk-backup"
+  ssh $host 'bkup=$(mktemp) && sgdisk --backup=$bkup /dev/sda >/dev/null 2>&1 && cat $bkup' > $tmp
+  tar --file=$metadata --append --transform="s:$tmp:sgdisk-backup:" $tmp
+
+  >&2 echo "- part1-img"
+  ssh $host 'dd if=/dev/sda1 bs=512 2>/dev/null' > $tmp
+  tar --file=$metadata --append --transform="s:$tmp:part1-img:" $tmp
+
+  >&2 echo "- super-dump"
+  ssh $host 'btrfs inspect-internal dump-super /dev/sda2' > $tmp
+  tar --file=$metadata --append --transform="s:$tmp:super-dump:" $tmp
+
+  exit_pop
+
+  cd $OLDPWD
+}
+
+function _setup()
+{
+  local dir
+
+  test -d $backup_dir || abort "$backup_dir is not a directory"
+  btrfs filesystem df $backup_dir > /dev/null
+  for dir in snapshots snapshots/new retention retention/{latest,days,months,weeks,years} images ; do
+    test -d $backup_dir/$dir || mkdir $backup_dir/$dir
+  done
+  btrfs property set $backup_dir/snapshots compression zlib
+
+  _get_metadata
+}
+
+function _backup()
+{
+  local dir
+  local snap=$(date +%Y.%m.%d_%H.%M)
+  local parent=''
+
+  cd $backup_dir/snapshots
+  for dir in $(ls -d *.*.*_*.*) ; do
+    test $(btrfs property get $dir ro) == 'ro=true' && parent=$dir
+  done
+  cd $OLDPWD
+
+  if [ $parent == '' ]; then
+
+    >&2 echo "full backup: snapshot=$snap"
+
+    ssh $host "
+      set -eu
+      snapshots='/.btrfs/snapshots'
+      btrfs subvolume snapshot -r / \$snapshots/$snap >&2
+      btrfs send \$snapshots/$snap | pi$compress
+    " | pi$compress -d | btrfs receive $backup_dir/snapshots
+
+  else
+
+    >&2 echo "differential backup: snapshot=$snap, parent=$parent"
+
+    ssh $host "
+      set -eu
+      snapshots='/.btrfs/snapshots'
+      btrfs subvolume snapshot -r / \$snapshots/$snap >&2
+      btrfs send -p \$snapshots/$parent \$snapshots/$snap | pi$compress
+    " | pi$compress -d | btrfs receive $backup_dir/snapshots/new
+
+    ##
+    # move snapshot
+    #
+    btrfs property set $backup_dir/snapshots/new/$snap ro false
+    mv $backup_dir/snapshots/new/$snap $backup_dir/snapshots/$snap
+    btrfs property set $backup_dir/snapshots/$snap ro true
+
+  fi
+}
+
+function _init_image()
+{
+  local dev
+  local metadata="$backup_dir/metadata.tar"
+
+  local tmp=$(mktemp)
+  exit_push "rm $tmp"
+
+  local image_raw_tmp=$(mktemp ${image_raw}.XXXX)
+  exit_push "test -f $image_raw_tmp && rm $image_raw_tmp || true"
+
+  ##
+  # get size
+  #
+  set -- $(
+    tar --file=$metadata --extract --to-stdout 'fdisk-l' \
+    | grep '^Disk .* bytes, .* sectors'
+  )
+  bytes=$5
+
+  ##
+  # create image
+  #
+  truncate -s $bytes $image_raw_tmp
+
+  ##
+  # install MBR
+  #
+  # ssh $SYSTEM 'dd if=/dev/sda bs=512 count=2048' > $tmp
+  # dd if=$tmp of=$image_raw_tmp bs=512 conv=notrunc
+  # sgdisk --clear $image_raw_tmp > /dev/null 2>&1
+  # udevadm settle; sync
+
+  ##
+  # clone partition table
+  #
+  tar --file=$metadata --extract --to-stdout 'sgdisk-backup' > $tmp
+  sgdisk --load-backup=$tmp $image_raw_tmp > /dev/null
+
+  fdisk -l $image_raw_tmp
+
+  ##
+  # create loopback device
+  #
+  dev=$(losetup --partscan --find --show $image_raw_tmp)
+  exit_push "losetup -d ${dev}"
+
+  ##
+  # clone part 1
+  #
+  tar --file=$metadata --extract --to-stdout 'part1-img' > $tmp
+  dd if=$tmp of=${dev}p1 bs=512
+
+  ##
+  # get fsid and label
+  #
+  tar --file=$metadata --extract --to-stdout 'super-dump' > $tmp
+  set -- $(egrep '^fsid[[:blank:]]+' $tmp)
+  UUID=$2
+  set -- $(egrep '^label[[:blank:]]+' $tmp)
+  LABEL=$2
+
+  ##
+  # create fs
+  #
+  mkfs.btrfs -U $UUID -L $LABEL ${dev}p2
+
+  ##
+  # detach loopback
+  #
+  exit_pop
+
+  mv -f $image_raw_tmp $image_raw
+
+  exit_pop
+  exit_pop
+}
+
+function _restore_backup()
+{
+  local mp=$(mktemp -d)
+  exit_push "rmdir $mp"
+
+  lo_mount $image_raw $mp -o compress=zlib:9
+  exit_push "lo_umount $mp"
+
+  test -d $mp/snapshots || mkdir $mp/snapshots
+
+  ##
+  # restore latest snapshot
+  #
+  local latest=$(ls -d $backup_dir/snapshots/*.*.*_*.* | tail -n1)
+  btrfs send $latest | btrfs receive $mp/snapshots
+
+  exit_pop
+  exit_pop
+}
+
+function _convert()
+{
+  local snap
+  local sub
+
+  local tmp=$(mktemp "${image_qcow}.XXXX")
+  exit_push "test -f $tmp && rm $tmp || true"
+
+  local mp=$(mktemp -d)
+  exit_push "rmdir $mp"
+
+  >&2 echo "converting $image_raw to $image_qcow"
+
+  qemu-img convert -O qcow2 $image_raw $tmp
+  mv -f $tmp $image_qcow
+
+  nbd_mount $image_qcow $mp -o compress=zlib:9,subvolid=5
+  exit_push "nbd_umount $mp"
+
+  cd $mp
+
+  test -d @ && btrfs subvolume delete @
+
+  ##
+  # create a snapshot of the last shapshot in @
+  #
+  snap=$(cd snapshots && ls -d *.*.*_*.* | tail -n1)
+  btrfs property set snapshots/$snap ro false
+  btrfs subvolume snap snapshots/$snap @
+  btrfs property set snapshots/$snap ro true
+
+  btrfs subvolume set-default @
+
+  for sub in @backup @nobackup ; do
+    test -d $sub || btrfs subvolume create $sub
+  done
+
+  test -d @swap || {
+    btrfs subvolume create @swap
+    chattr +C @swap
+    btrfs property set @swap compression none
+  }
+
+  cd @
+
+  ##
+  # make sure that files in boot are compressed with zlib
+  # grub < 2.04 does not understand zstd
+  #
+  # btrfs filesystem defragment -r -f -czlib boot
+  find boot -xdev -type d -exec btrfs prop set '{}' compression zlib ';'
+
+  ##
+  # disable swap
+  #
+  sed -i 's:^\(/swap/.*\):# \1:' etc/fstab
+
+  cd $HOME
+
+  exit_pop
+  exit_pop
+  exit_pop
+}
+
+function _mkimage()
+{
+  _init_image
+  _restore_backup
+  _convert
+}
+
+function _rmlink()
+{
+  local snapshot
+
+  cd $1
+  ls | sort | head -n -$2 | while read snapshot ; do
+    rm $snapshot
+  done
+  cd $OLDPWD
+}
+
+function _retention()
+{
+  local snapshot
+  local date
+  local linked
+
+  ##
+  # create links
+  #
+  cd $backup_dir/snapshots
+  for snapshot in *.*.*_*.* ; do
+    date=${snapshot//_*/}
+    set -- $(date -d ${date//./-} '+%Y %m %d %W')
+    y=$1 m=$2 d=$3 w=$4
+    test -L $backup_dir/retention/latest/$snapshot || ln -s $snapshot $backup_dir/retention/latest/$snapshot
+    test -L $backup_dir/retention/days/$y.$m.$d || ln -s $snapshot $backup_dir/retention/days/$y.$m.$d
+    test -L $backup_dir/retention/weeks/$y-$w || ln -s $snapshot $backup_dir/retention/weeks/$y-$w
+    test -L $backup_dir/retention/months/$y.$m || ln -s $snapshot $backup_dir/retention/months/$y.$m
+    test -L $backup_dir/retention/years/$y || ln -s $snapshot $backup_dir/retention/years/$y
+  done
+  cd $OLDPWD
+
+  ##
+  # remove links
+  #
+  _rmlink $backup_dir/retention/latest ${retention[latest]}
+  _rmlink $backup_dir/retention/days ${retention[days]}
+  _rmlink $backup_dir/retention/weeks ${retention[weeks]}
+  _rmlink $backup_dir/retention/months ${retention[months]}
+  _rmlink $backup_dir/retention/years ${retention[years]}
+
+  ##
+  # get all linked snapshots
+  #
+  cd $backup_dir/retention
+  linked=$(find -type l -printf '%l\n' | sort -u)
+
+  ##
+  # remove unlinked snapshots
+  #
+  cd $backup_dir/snapshots
+  for snapshot in *.*.*_*.* ; do
+    for i in $linked EOL ; do
+      test $i == $snapshot && break
+      test $i == EOL && {
+        btrfs subvolume delete $snapshot
+      }
+    done
+  done
+  cd $OLDPWD
+}
+
+eval set -- "$PARAMETERS"
+
+while true ; do
+  case "$1" in
+  -B|--backup-dir) backup_dir=$2 ; shift 2 ;;
+  -H|--host) host=$2 ; shift 2 ;;
+  --latest) (( retention[latest] = $2 )) ; shift 2 ;;
+  --days) (( retention[days] = $2 )) ; shift 2 ;;
+  --weeks) (( retention[weeks] = $2 )) ; shift 2 ;;
+  --months) (( retention[months] = $2 )) ; shift 2 ;;
+  --years) (( retention[years] = $2 )) ; shift 2 ;;
+  -s|--setup) _check && _setup ; shift ;;
+  -b|--backup) _check && _backup ; shift ;;
+  -r|--retention) _check && _retention ; shift ;;
+  -i|--mkimage) _check && _mkimage ; shift ;;
+  --) shift ; break ;;
+  *) usage ;;
+  esac
+done
+
+exit 0
