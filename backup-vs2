@@ -1,0 +1,48 @@
+#!/bin/bash
+
+set -eu
+
+HOST='vs2.bar.net'
+DIR='/backup/vs2'
+MAIL_FROM='foor@bar.net'
+MAIL_TO=$MAIL_FROM
+
+function title()
+{
+  echo "-------------------------------------------------------------------"
+  echo "$1"
+  echo "-------------------------------------------------------------------"
+}
+
+function mail()
+{
+  /usr/sbin/sendmail -f $MAIL_FROM $MAIL_TO <<EOF
+From: $MAIL_FROM
+To: $MAIL_TO
+Subject: $1
+
+$(cat -)
+EOF
+}
+
+function epilogue()
+{
+  rc=$?
+  title "rc=$rc, seconds=$SECONDS"
+  if [ $rc -ne 0 ] || [ "${SEND_MAIL:-false}" != 'false' ]; then
+    test -t 0 || mail "$HOST $@ ($rc)" < $out
+  fi
+  exit $rc
+}
+
+out="$DIR/btrfs-backup.out"
+
+trap epilogue EXIT
+
+if [ ! -t 0 ]; then 
+  exec > $out 2>&1
+fi
+
+title "$HOST $@"
+
+/root/btrfs-backup/btrfs-backup --backup-dir=$DIR --host=$HOST $@
