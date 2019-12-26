@@ -2,21 +2,36 @@
 
 set -eu
 
-HOST='vs2.bar.net'
-DIR='/backup/vs2'
-MAIL_FROM='foor@bar.net'
+HOST=$1
+shift
+
+DIR=$1
+shift
+
+MAIL_FROM=$1
+shift
+
 MAIL_TO=$MAIL_FROM
+
+lockfile="$DIR/.lockfile.$HOST"
+exec 9> $lockfile
+flock -n 9 || {
+  >&2 echo "$lockfile is locked"
+  exit 1
+}
 
 function title()
 {
   echo "-------------------------------------------------------------------"
-  echo "$1"
+  echo "$@"
   echo "-------------------------------------------------------------------"
 }
 
 function mail()
 {
   /usr/sbin/sendmail -f $MAIL_FROM $MAIL_TO <<EOF
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
 From: $MAIL_FROM
 To: $MAIL_TO
 Subject: $1
@@ -30,7 +45,7 @@ function epilogue()
   rc=$?
   title "rc=$rc, seconds=$SECONDS"
   if [ $rc -ne 0 ] || [ "${SEND_MAIL:-false}" != 'false' ]; then
-    test -t 0 || mail "$HOST $@ ($rc)" < $out
+    test -t 0 || mail "backup $HOST $@ ($rc)" < $out
   fi
   exit $rc
 }
@@ -46,3 +61,5 @@ fi
 title "$HOST $@"
 
 /root/btrfs-backup/btrfs-backup --backup-dir=$DIR --host=$HOST $@
+
+exit 0
