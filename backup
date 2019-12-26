@@ -3,13 +3,10 @@
 set -eu
 
 HOST=$1
-shift
+DIR=$2
+MAIL_FROM=$3
 
-DIR=$1
-shift
-
-MAIL_FROM=$1
-shift
+shift 3
 
 MAIL_TO=$MAIL_FROM
 
