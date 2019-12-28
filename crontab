@@ -2,5 +2,5 @@
 ##
 # vs2
 #
-00 0,8,12,16,20  * * *  SEND_MAIL=false /root/btrfs-backup/backup vs2 /backup/vs2 foo@bar.net --backup
-00 4             * * *  SEND_MAIL=true  /root/btrfs-backup/backup vs2 /backup/vs2 foo@bar.net --backup --retention --mkimage
+00 0,8,12,16,20  * * *  SEND_MAIL=false /root/btrfs-backup/backup vs2 /backup/vs2 foo@bar.net --backup --update-image
+00 4             * * *  SEND_MAIL=true  /root/btrfs-backup/backup vs2 /backup/vs2 foo@bar.net --backup --retention --create-image
