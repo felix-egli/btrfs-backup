@@ -351,6 +351,7 @@ function _restore_backup()
   local image_tmp=$1
   local parent=''
   local dir
+  local updated=0
 
   local mp=$(mktemp -d)
   exit_push "rmdir $mp"
@@ -387,6 +388,7 @@ function _restore_backup()
         nice -n19 btrfs send $latest
       }
     ) | nice -n19 btrfs receive $mp/snapshots
+    updated=1
   else
     >&2 echo "already current: snapshot=$(basename $latest)"
   fi
@@ -399,6 +401,8 @@ function _restore_backup()
   else
     test $image_tmp == $image_raw || mv $image_tmp $image_raw
   fi
+
+  return $updated
 }
 
 function _convert()
@@ -472,6 +476,8 @@ function _convert()
 
 function _create_image()
 {
+  local updated=0
+
   if [ $direct_qcow2 == true ]; then
     local image_tmp=$(mktemp ${image_qcow}.XXXX)
   else
@@ -480,23 +486,26 @@ function _create_image()
   exit_push "test -f $image_tmp && rm $image_tmp || true"
 
   _init_image $image_tmp
-  _restore_backup $image_tmp
+  _restore_backup $image_tmp || updated=$?
 
   exit_pop
 
-  _convert
+  test $updated -eq 1 && _convert || true
 }
 
 function _update_image()
 {
+  local updated=0
+
   if [ $direct_qcow2 == true ]; then
     local image_tmp=${image_qcow}
   else
     local image_tmp=${image_raw}
   fi
 
-  _restore_backup $image_tmp
-  _convert
+  _restore_backup $image_tmp || updated=$?
+
+  test $updated -eq 1 && _convert || true
 }
 
 function _mount_raw()
