@@ -25,27 +25,29 @@ function usage()
 Usage: $COMMAND --backup-dir=DIR --host=HOST [optional] operation..
 
 Required:
-  --backup-dir=DIR    Directory where backups are saved.
-  --host=HOST         Host to backup.
+  --backup-dir=DIR  Directory where backups are saved.
+  --host=HOST       Host to backup.
 
 Optional:
-  --latest=COUNT      Number of latest snapshots to keep.
-  --days=DAYS         Number of days to keep.
-  --weeks=WEEKS       Number of weeks to keep.
-  --months=MONTHS     Number of months to keep.
-  --years=YEARS       Number of years to keep.
+  --latest=COUNT    Number of latest snapshots to keep.
+  --days=DAYS       Number of days to keep.
+  --weeks=WEEKS     Number of weeks to keep.
+  --months=MONTHS   Number of months to keep.
+  --years=YEARS     Number of years to keep.
 
 Operation:
-  --setup             Setup the directory structure in the backup directory.
-  --backup            Perform a backup operation.
-  --retention         Perform a retention operation.
-  --mkimage           Create a QCOW2 image.
+  --setup           Setup the directory structure in the backup directory.
+  --backup          Perform a backup operation.
+  --retention       Perform a retention operation.
+  --create-image    Create a QCOW2 image from scratch.
+  --update-image    Update the RAW image with the latest backup and create a
+                    QCOW2 image.
 
 
 Current parameters:
 
-host:       $host
-backup-dir: $backup_dir
+host:       ${host:-NOT-SET}
+backup-dir: ${backup_dir:-NOT-SET}
 
 retention:
 $(
@@ -70,9 +72,11 @@ trap 'usage' EXIT
 test $# -gt 0
 
 PARAMETERS=$(
-  getopt -o hB:H:sbri \
-    --long help,backup-dir:,host:,setup,backup,retention,mkimage,latest:,days:,weeks:,months:,years:,direct-qcow2 \
-    -n 'btbackup' -- "$@"
+  getopt -o 'hB:H:sbriu' \
+    --long 'help,backup-dir:,host:,\
+setup,backup,retention,create-image,update-image,mount-raw,mount-qcow2,\
+latest:,days:,weeks:,months:,years:,direct-qcow2,list-images' \
+    -n 'btrfs_backup' -- "$@"
 )
 
 trap - EXIT
@@ -345,6 +349,8 @@ function _init_image()
 function _restore_backup()
 {
   local image_tmp=$1
+  local parent=''
+  local dir
 
   local mp=$(mktemp -d)
   exit_push "rmdir $mp"
@@ -359,19 +365,39 @@ function _restore_backup()
 
   test -d $mp/snapshots || mkdir $mp/snapshots
 
+  cd $mp/snapshots
+  for dir in $(ls -d *.*.*_*.* 2> /dev/null) ; do
+    test $(btrfs property get $dir ro) == 'ro=true' && {
+      parent="$backup_dir/snapshots/$dir"
+    }
+  done
+  cd $OLDPWD
+
   ##
   # restore latest snapshot
   #
   local latest=$(ls -d $backup_dir/snapshots/*.*.*_*.* | tail -n1)
-  nice -n19 btrfs send $latest | nice -n19 btrfs receive $mp/snapshots
+  if [ "$parent" != "$latest" ] ; then
+    (
+      test "$parent" && {
+        >&2 echo "differential restore: snapshot=$(basename $latest), parent=$(basename $parent)"
+        nice -n19 btrfs send -p $parent $latest
+      } || {
+        >&2 echo "full restore: snapshot=$(basename $latest)"
+        nice -n19 btrfs send $latest
+      }
+    ) | nice -n19 btrfs receive $mp/snapshots
+  else
+    >&2 echo "already current: snapshot=$(basename $latest)"
+  fi
 
   exit_pop
   exit_pop
 
   if [ $direct_qcow2 == true ]; then
-    mv $image_tmp $image_qcow
+    test $image_tmp == $image_qcow || mv $image_tmp $image_qcow
   else
-    mv $image_tmp $image_raw
+    test $image_tmp == $image_raw || mv $image_tmp $image_raw
   fi
 }
 
@@ -444,7 +470,7 @@ function _convert()
   fi
 }
 
-function _mkimage()
+function _create_image()
 {
   if [ $direct_qcow2 == true ]; then
     local image_tmp=$(mktemp ${image_qcow}.XXXX)
@@ -459,6 +485,50 @@ function _mkimage()
   exit_pop
 
   _convert
+}
+
+function _update_image()
+{
+  if [ $direct_qcow2 == true ]; then
+    local image_tmp=${image_qcow}
+  else
+    local image_tmp=${image_raw}
+  fi
+
+  _restore_backup $image_tmp
+  _convert
+}
+
+function _mount_raw()
+{
+  local mp=$(mktemp -d)
+  exit_push "rmdir $mp"
+
+  lo_mount $image_raw $mp -o compress=zlib:9,subvolid=5
+  exit_push "lo_umount $mp"
+
+  cd $mp
+  bash
+  cd $HOME
+
+  exit_pop
+  exit_pop
+}
+
+function _mount_qcow2()
+{
+  local mp=$(mktemp -d)
+  exit_push "rmdir $mp"
+
+  nbd_mount $image_qcow $mp -o compress=zlib:9,subvolid=5
+  exit_push "nbd_umount $mp"
+
+  cd $mp
+  bash
+  cd $HOME
+
+  exit_pop
+  exit_pop
 }
 
 function _rmlink()
@@ -524,6 +594,16 @@ function _retention()
   cd $OLDPWD
 }
 
+function _list_images()
+{
+  for file in ${image_raw} ${image_qcow} ; do
+    test -f $file && {
+      set -- $(du -sh $file)
+      echo "$(ls -lh $file) - $1"
+    }
+  done
+}
+
 function _run()
 {
   for cmd in $@ ; do
@@ -538,28 +618,36 @@ eval set -- "$PARAMETERS"
 
 while true ; do
   case "$1" in
-  -B|--backup-dir)  backup_dir=$2
-                    lockfile="$backup_dir/.lockfile"
-                    exec 9> $lockfile
-                    flock -n 9 || {
-                      >&2 echo "$lockfile is locked"
-                      exit 1
-                    }
-                    shift
-                    ;;
-  -H|--host)        host=$2 ; shift ;;
-  --latest)         (( retention[latest] = $2 )) ; shift ;;
-  --days)           (( retention[days] = $2 )) ; shift ;;
-  --weeks)          (( retention[weeks] = $2 )) ; shift ;;
-  --months)         (( retention[months] = $2 )) ; shift ;;
-  --years)          (( retention[years] = $2 )) ; shift ;;
-  --direct-qcow2)   direct_qcow2=true ;;
-  -s|--setup)       _check && _run setup ;;
-  -b|--backup)      _check && _run backup ;;
-  -r|--retention)   _check && _run retention ;;
-  -i|--mkimage)     _check && _run mkimage ;;
-  --)               break ;;
-  *)                usage ;;
+  -B|--backup-dir)
+    backup_dir=$2
+    lockfile="$backup_dir/.lockfile"
+    exec 9> $lockfile
+    flock -n 9 || {
+      >&2 echo "$lockfile is locked"
+      exit 1
+    }
+    shift
+    ;;
+  -H|--host)
+    host=$2
+    shift
+    ;;
+  --latest)           (( retention[latest] = $2 )) ; shift ;;
+  --days)             (( retention[days] = $2 )) ; shift ;;
+  --weeks)            (( retention[weeks] = $2 )) ; shift ;;
+  --months)           (( retention[months] = $2 )) ; shift ;;
+  --years)            (( retention[years] = $2 )) ; shift ;;
+  --direct-qcow2)     direct_qcow2=true ;;
+  -s|--setup)         _check && _run setup ;;
+  -b|--backup)        _check && _run backup ;;
+  -r|--retention)     _check && _run retention ;;
+  -i|--create-image)  _check && _run create_image ;;
+  -u|--update-image)  _check && _run update_image ;;
+  --list-images)      _check && _run list_images ;;
+  --mount-raw)        _check && _run mount_raw ;;
+  --mount-qcow2)      _check && _run mount_qcow2 ;;
+  --)                 break ;;
+  *)                  usage ;;
   esac
   shift
 done

@@ -1,6 +1,9 @@
 #!/bin/bash
 
 set -eu
+set -o pipefail
+
+SCRIPTDIR=$(cd $(dirname $0) && pwd)
 
 HOST=$1
 DIR=$2
@@ -57,6 +60,6 @@ fi
 
 title "$HOST $@"
 
-/root/btrfs-backup/btrfs-backup --backup-dir=$DIR --host=$HOST $@
+$SCRIPTDIR/btrfs-backup --backup-dir=$DIR --host=$HOST $@
 
 exit 0
