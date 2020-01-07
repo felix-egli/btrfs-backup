@@ -10,10 +10,10 @@ host=''
 compress='gz'
 
 declare -A retention=(
-  [latest]=14
+  [latest]=20
   [days]=30
-  [weeks]=12
-  [months]=12
+  [weeks]=26
+  [months]=24
   [years]=20
 )
 
@@ -42,6 +42,7 @@ Operation:
   --create-image    Create a QCOW2 image from scratch.
   --update-image    Update the RAW image with the latest backup and create a
                     QCOW2 image.
+  --clone-image     Clone the RAW image into a QCOW2 image.
 
 
 Current parameters:
@@ -72,9 +73,9 @@ trap 'usage' EXIT
 test $# -gt 0
 
 PARAMETERS=$(
-  getopt -o 'hB:H:sbriu' \
+  getopt -o 'hB:H:sbriuc' \
     --long 'help,backup-dir:,host:,\
-setup,backup,retention,create-image,update-image,mount-raw,mount-qcow2,\
+setup,backup,retention,create-image,update-image,clone-image,mount-raw,mount-qcow2,\
 latest:,days:,weeks:,months:,years:,direct-qcow2,list-images' \
     -n 'btrfs_backup' -- "$@"
 )
@@ -238,7 +239,7 @@ function _backup()
       snapshots='/.btrfs/snapshots'
       btrfs subvolume snapshot -r / \$snapshots/$snap >&2
       btrfs send \$snapshots/$snap | pi$compress
-    " | nice -n19 pi$compress -d | nice -n19 btrfs receive $backup_dir/snapshots
+    " | pi$compress -d | btrfs receive $backup_dir/snapshots
 
   else
 
@@ -249,7 +250,7 @@ function _backup()
       snapshots='/.btrfs/snapshots'
       btrfs subvolume snapshot -r / \$snapshots/$snap >&2
       btrfs send -p \$snapshots/$parent \$snapshots/$snap | pi$compress
-    " | nice -n19 pi$compress -d | nice -n19 btrfs receive $backup_dir/snapshots/new
+    " | pi$compress -d | btrfs receive $backup_dir/snapshots/new
 
     ##
     # move snapshot
@@ -382,12 +383,12 @@ function _restore_backup()
     (
       test "$parent" && {
         >&2 echo "differential restore: snapshot=$(basename $latest), parent=$(basename $parent)"
-        nice -n19 btrfs send -p $parent $latest
+        btrfs send -p $parent $latest
       } || {
         >&2 echo "full restore: snapshot=$(basename $latest)"
-        nice -n19 btrfs send $latest
+        btrfs send $latest
       }
-    ) | nice -n19 btrfs receive $mp/snapshots
+    ) | btrfs receive $mp/snapshots
     updated=1
   else
     >&2 echo "already current: snapshot=$(basename $latest)"
@@ -416,7 +417,7 @@ function _convert()
 
     >&2 echo "converting $image_raw to $image_qcow"
 
-    nice -n19 qemu-img convert -O qcow2 $image_raw $tmp
+    qemu-img convert -O qcow2 $image_raw $tmp
     mv -f $tmp $image_qcow
   fi
 
@@ -506,6 +507,16 @@ function _update_image()
   _restore_backup $image_tmp || updated=$?
 
   test $updated -eq 1 && _convert || true
+}
+
+function _clone_image()
+{
+  #
+  # if the option --direct-qcow2 was given, then this does not clone any 
+  # image, but perform the setup.
+  #
+
+  _convert || true
 }
 
 function _mount_raw()
@@ -629,7 +640,7 @@ while true ; do
   case "$1" in
   -B|--backup-dir)
     backup_dir=$2
-    lockfile="$backup_dir/.lockfile"
+    lockfile="$backup_dir/.lockfile-vs1"
     exec 9> $lockfile
     flock -n 9 || {
       >&2 echo "$lockfile is locked"
@@ -652,6 +663,7 @@ while true ; do
   -r|--retention)     _check && _run retention ;;
   -i|--create-image)  _check && _run create_image ;;
   -u|--update-image)  _check && _run update_image ;;
+  -c|--clone-image)   _check && _run clone_image ;;
   --list-images)      _check && _run list_images ;;
   --mount-raw)        _check && _run mount_raw ;;
   --mount-qcow2)      _check && _run mount_qcow2 ;;
