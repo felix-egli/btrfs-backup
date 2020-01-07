@@ -640,7 +640,7 @@ while true ; do
   case "$1" in
   -B|--backup-dir)
     backup_dir=$2
-    lockfile="$backup_dir/.lockfile-vs1"
+    lockfile="$backup_dir/.lockfile"
     exec 9> $lockfile
     flock -n 9 || {
       >&2 echo "$lockfile is locked"
