@@ -182,7 +182,7 @@ function _get_metadata()
   exit_push "rm $tmp"
 
   local metatmp=$(mktemp ${metadata}.XXXX)
-  exit_push "test -f $metatmp && rm $metatmp"
+  exit_push "test -f $metatmp && rm $metatmp || true"
 
   >&2 echo "getting metadata from ${host}:"
 
