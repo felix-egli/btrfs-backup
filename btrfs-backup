@@ -10,7 +10,7 @@ host=''
 compress='gz'
 
 declare -A retention=(
-  [latest]=20
+  [latest]=50
   [days]=30
   [weeks]=26
   [months]=24
@@ -178,6 +178,9 @@ function _get_metadata()
   local tmp=$(mktemp)
   exit_push "rm $tmp"
 
+  local metatmp=$(mktemp ${metadata}.XXXX)
+  exit_push "test -f $metatmp && rm $metatmp"
+
   >&2 echo "getting metadata from ${host}:"
 
   cd $(dirname $tmp)
@@ -185,22 +188,29 @@ function _get_metadata()
 
   >&2 echo "- fdisk-l"
   ssh $host 'LANG=C; fdisk -l /dev/sda' > $tmp
-  tar --file=$metadata --create --transform="s:$tmp:fdisk-l:" $tmp
+  tar --file=$metatmp --create --transform="s:$tmp:fdisk-l:" $tmp
 
   >&2 echo "- sgdisk-backup"
   ssh $host 'bkup=$(mktemp) && sgdisk --backup=$bkup /dev/sda >/dev/null 2>&1 && cat $bkup' > $tmp
-  tar --file=$metadata --append --transform="s:$tmp:sgdisk-backup:" $tmp
+  tar --file=$metatmp --append --transform="s:$tmp:sgdisk-backup:" $tmp
 
   >&2 echo "- part1-img"
   ssh $host 'dd if=/dev/sda1 bs=512 2>/dev/null' > $tmp
-  tar --file=$metadata --append --transform="s:$tmp:part1-img:" $tmp
+  tar --file=$metatmp --append --transform="s:$tmp:part1-img:" $tmp
 
   >&2 echo "- super-dump"
   ssh $host 'btrfs inspect-internal dump-super /dev/sda2' > $tmp
-  tar --file=$metadata --append --transform="s:$tmp:super-dump:" $tmp
+  tar --file=$metatmp --append --transform="s:$tmp:super-dump:" $tmp
+
+  >&2 echo "- fstab"
+  ssh $host 'cat /etc/fstab' > $tmp
+  tar --file=$metatmp --append --transform="s:$tmp:fstab:" $tmp
+
+  mv -f $metatmp $metadata
 
   cd $OLDPWD
 
+  exit_pop
   exit_pop
 }
 
@@ -260,6 +270,8 @@ function _backup()
     btrfs property set $backup_dir/snapshots/$snap ro true
 
   fi
+
+  _get_metadata
 }
 
 function _init_image()
@@ -441,17 +453,24 @@ function _convert()
 
   btrfs subvolume set-default @
 
-  for sub in @backup @nobackup ; do
+  subvolumes=$(
+    tar --file=$metadata --extract --to-stdout 'fstab' \
+    | grep ',subvol=@' \
+    | sed -r 's/.*subvol=(@[a-z]+).*/\1/'
+  )
+
+  cd @/.btrfs
+
+  for sub in $subvolumes ; do
     test -d $sub || btrfs subvolume create $sub
   done
 
   test -d @swap || {
-    btrfs subvolume create @swap
     chattr +C @swap
     btrfs property set @swap compression none
   }
 
-  cd @
+  cd ..
 
   ##
   # make sure that files in boot are compressed with zlib
@@ -463,7 +482,7 @@ function _convert()
   ##
   # disable swap
   #
-  sed -i 's:^\(/swap/.*\):# \1:' etc/fstab
+  sed -i -r 's:^(/swap/.*):# \1:' etc/fstab
 
   cd $HOME
 
