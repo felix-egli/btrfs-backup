@@ -43,17 +43,19 @@ Operation:
   --update-image    Update the RAW image with the latest backup and create a
                     QCOW2 image.
   --clone-image     Clone the RAW image into a QCOW2 image.
+  --list-images     List the images.
+  --mount-raw       Mount the RAW image.
+  --mount-qcow2     Mount the QCOW2 image.
 
 
 Current parameters:
+  host:       ${host:-NOT-SET}
+  backup-dir: ${backup_dir:-NOT-SET}
 
-host:       ${host:-NOT-SET}
-backup-dir: ${backup_dir:-NOT-SET}
-
-retention:
+  retention:
 $(
 for i in ${!retention[@]} ; do
-  printf '  %-9s %s\n' ${i}: ${retention[$i]}
+  printf '    %-9s %s\n' ${i}: ${retention[$i]}
 done
 )
 
@@ -88,9 +90,10 @@ function exit_handler()
 {
   local rc=$?
   local idx
+
   set +eu
-  test $rc -ne 0 && set -x
   for idx in ${!exit_functions[*]} ; do
+    test $rc -ne 0 && echo "${exit_functions[$idx]}"
     eval "${exit_functions[$idx]}"
   done
   exit $rc
