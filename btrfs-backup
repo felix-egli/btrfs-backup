@@ -118,6 +118,21 @@ function exit_pop()
   unset exit_functions[$idx]
 }
 
+function check_qemu_nbd()
+{
+  type qemu-nbd > /dev/null 2>&1 || {
+    echo 'qemu-nbd is missing. version 4.2 or newer is required.'
+    exit 1
+  }
+
+  set -- $(qemu-nbd -V | egrep '^qemu-nbd' | tr '.' ' ')
+
+  if [ $2 -lt 4 ] || [ $2 -eq 4 -a $3 -lt 2 ] ; then
+    echo "qemu-nbd version $2.$3 found. version 4.2 or newer is required."
+    exit 1
+  fi
+}
+
 function get_nbd()
 {
   local size nbd
@@ -222,6 +237,9 @@ function _setup()
 {
   local dir
 
+  apt-get install -y gdisk btrfs-progs qemu-utils 
+  ssh $host 'apt-get install -y gdisk btrfs-progs'
+
   test -d $backup_dir || abort "$backup_dir is not a directory"
   btrfs filesystem df $backup_dir > /dev/null
   for dir in snapshots snapshots/new retention retention/{latest,days,months,weeks,years} images ; do
@@ -298,6 +316,7 @@ function _init_image()
   # create image
   #
   if [ $direct_qcow2 == true ]; then
+    check_qemu_nbd
     qemu-img create -f qcow2 $image_tmp $bytes
     udevadm settle; sync
 
@@ -374,6 +393,7 @@ function _restore_backup()
   exit_push "rmdir $mp"
 
   if [ $direct_qcow2 == true ]; then
+    check_qemu_nbd
     nbd_mount $image_tmp $mp -o compress=zlib:9
     exit_push "nbd_umount $mp"
   else
@@ -427,6 +447,7 @@ function _convert()
   local snap
   local sub
 
+  check_qemu_nbd
   if [ $direct_qcow2 != true ]; then
     local tmp=$(mktemp "${image_qcow}.XXXX")
     exit_push "test -f $tmp && rm $tmp || true"
@@ -503,6 +524,7 @@ function _create_image()
   local updated=0
 
   if [ $direct_qcow2 == true ]; then
+    check_qemu_nbd
     local image_tmp=$(mktemp ${image_qcow}.XXXX)
   else
     local image_tmp=$(mktemp ${image_raw}.XXXX)
@@ -562,6 +584,8 @@ function _mount_qcow2()
 {
   local mp=$(mktemp -d)
   exit_push "rmdir $mp"
+
+  check_qemu_nbd
 
   nbd_mount $image_qcow $mp -o compress=zlib:9,subvolid=5
   exit_push "nbd_umount $mp"
