@@ -679,7 +679,7 @@ function _run()
   done
 }
 
-PATH="/usr/sbin:/sbin:$PATH"
+PATH="/usr/sbin:/sbin:/usr/local/bin:$PATH"
 
 eval set -- "$PARAMETERS"
 
