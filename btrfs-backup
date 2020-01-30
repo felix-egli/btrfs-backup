@@ -153,7 +153,7 @@ function get_nbd()
 function nbd_mount()
 {
   NBD=$(get_nbd)
-  qemu-nbd -c ${NBD} $1
+  qemu-nbd -n --fork --persistent -v -c ${NBD} -f qcow2 $1
   shift
   udevadm settle; sync
   mount ${NBD}p2 $@
@@ -466,15 +466,15 @@ function _convert()
 
   cd $mp
 
-  test -d @ && btrfs subvolume delete @
-
-  ##
-  # create a snapshot of the last shapshot in @
-  #
-  snap=$(cd snapshots && ls -d *.*.*_*.* | tail -n1)
-  btrfs property set snapshots/$snap ro false
-  btrfs subvolume snap snapshots/$snap @
-  btrfs property set snapshots/$snap ro true
+  test -d @ || {
+    ##
+    # create the snapshot @ of the latest shapshot
+    #
+    snap=$(cd snapshots && ls -d *.*.*_*.* | tail -n1)
+    btrfs property set snapshots/$snap ro false
+    btrfs subvolume snap snapshots/$snap @
+    btrfs property set snapshots/$snap ro true
+  }
 
   btrfs subvolume set-default @
 
