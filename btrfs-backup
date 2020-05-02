@@ -452,10 +452,11 @@ function _convert()
     local tmp=$(mktemp "${image_qcow}.XXXX")
     exit_push "test -f $tmp && rm $tmp || true"
 
-    >&2 echo "converting $image_raw to $image_qcow"
+    >&2 echo "$(date) - converting $image_raw to $image_qcow"
 
     qemu-img convert -O qcow2 $image_raw $tmp
     mv -f $tmp $image_qcow
+    >&2 echo "$(date) - qemu-img convert done"
   fi
 
   local mp=$(mktemp -d)
@@ -484,8 +485,6 @@ function _convert()
     | sed -r 's/.*subvol=(@[a-z]+).*/\1/'
   )
 
-  cd @/.btrfs
-
   for sub in $subvolumes ; do
     test -d $sub || btrfs subvolume create $sub
   done
@@ -495,7 +494,7 @@ function _convert()
     btrfs property set @swap compression none
   }
 
-  cd ..
+  cd @
 
   ##
   # make sure that files in boot are compressed with zlib
