@@ -663,6 +663,19 @@ function _retention()
     done
   done
   cd $OLDPWD
+
+  ##
+  # remove dead links
+  #
+  for period in latest days weeks months years ; do
+    cd $backup_dir/retention/$period
+    while read file target ; do
+      test -d $backup_dir/snapshots/$target && {
+        continue
+      }
+      rm $file
+    done < <(find -type l -printf '%f %l\n')
+  done
 }
 
 function _list_images()
