@@ -156,7 +156,7 @@ function nbd_mount()
   qemu-nbd -n --fork --persistent -v -c ${NBD} -f qcow2 $1
   shift
   udevadm settle; sync
-  mount ${NBD}p2 $@
+  mount -t btrfs ${NBD}p2 $@
 }
 
 function nbd_umount()
@@ -171,7 +171,11 @@ function lo_mount()
 {
   DEV=$(losetup --partscan --find --show $1)
   shift
-  mount ${DEV}p2 $@
+  udevadm settle; sync
+  mount -t btrfs ${DEV}p2 $@ || {
+    losetup -d $DEV
+    exit 1
+  }
 }
 
 function lo_umount()
@@ -371,8 +375,8 @@ function _init_image()
   ##
   # create fs
   #
-  mkfs.btrfs -U $UUID -L $LABEL ${dev}p2
-  udevadm settle; sync
+  mkfs.btrfs -m single -U $UUID -L $LABEL ${dev}p2
+  udevadm settle; sync; sync
 
   ##
   # detach loopback
@@ -482,6 +486,7 @@ function _convert()
   subvolumes=$(
     cat @/etc/fstab \
     | grep ',subvol=@' \
+    | grep -v '^#' \
     | sed -r 's/.*subvol=(@[a-z]+).*/\1/'
   )
 
