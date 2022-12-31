@@ -1,0 +1,80 @@
+#!/bin/bash
+
+set -eu
+
+SCRIPT=$0
+
+function usage()
+{
+  echo "$SCRIPT IMAGE"
+  exit 1
+}
+
+test $# -eq 1 || usage
+test -f $1 || usage
+test -s $1 || usage
+
+IMAGE=$1
+
+set -x
+
+MP=$(mktemp -d)
+
+
+function get_nbd()
+{
+  local size nbd
+
+  modprobe nbd
+
+  (
+    cd /sys/devices/virtual/block/
+    for nbd in $(ls -d nbd*) ; do
+      size=$(cat $nbd/size)
+      test $size -eq 0 && break
+    done
+
+    echo "/dev/$nbd"
+  )
+}
+
+NBD=$(get_nbd)
+
+qemu-nbd -c $NBD $IMAGE
+udevadm settle; sync
+
+mount ${NBD}p2 $MP -o subvol=@
+
+trap '
+cd /tmp
+umount ${NBD}p2
+qemu-nbd -d $NBD
+' EXIT
+
+chattr -R -c $MP/boot
+
+chroot $MP /bin/bash <<EOF
+set -exu
+
+trap '
+umount /proc
+umount /dev
+umount /sys
+' EXIT
+
+mount none -t sysfs /sys
+mount none -t devtmpfs /dev
+mount none -t proc /proc
+
+echo 'root:root' | chpasswd
+
+cd /etc
+mv resolv.conf{,.save}
+cat - <<EORC > resolv.conf
+domain raumfahrtingenieure.ch
+nameserver 192.168.9.4
+EORC
+
+EOF
+
+exit 0
