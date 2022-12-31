@@ -11,10 +11,10 @@ compress='gzip -3'
 uncompress='gunzip'
 
 declare -A retention=(
-  [latest]=50
-  [days]=30
-  [weeks]=26
-  [months]=24
+  [latest]=5
+  [days]=5
+  [weeks]=4
+  [months]=4
   [years]=20
 )
 
@@ -76,7 +76,7 @@ trap 'usage' EXIT
 test $# -gt 0
 
 PARAMETERS=$(
-  getopt -o 'hB:H:sbriuc' \
+  getopt -o 'hB:H:sbriucv' \
     --long 'help,backup-dir:,host:,\
 setup,backup,retention,create-image,update-image,clone-image,mount-raw,mount-qcow2,\
 latest:,days:,weeks:,months:,years:,direct-qcow2,list-images' \
@@ -163,6 +163,10 @@ function nbd_umount()
 {
   cd $HOME
   umount $@
+  test "${UUID:-}" && {
+    btrfstune -M $UUID ${NBD}p2
+    unset UUID
+  }
   qemu-nbd -d ${NBD}
   NBD=''
 }
@@ -182,6 +186,10 @@ function lo_umount()
 {
   cd $HOME
   umount $@
+  test "${UUID:-}" && {
+    btrfstune -M $UUID ${DEV}p2
+    unset UUID
+  }
   losetup -d ${DEV}
   DEV=''
 }
@@ -330,6 +338,7 @@ function _init_image()
     exit_push "qemu-nbd -d ${NBD}"
   else
     truncate -s $bytes $image_tmp
+    udevadm settle; sync
 
     ##
     # create loopback device
@@ -362,6 +371,7 @@ function _init_image()
   #
   tar --file=$metadata --extract --to-stdout 'part1-img' > $tmp
   dd if=$tmp of=${dev}p1 bs=512
+  udevadm settle; sync
 
   ##
   # get fsid and label
@@ -375,8 +385,8 @@ function _init_image()
   ##
   # create fs
   #
-  mkfs.btrfs -m single -U $UUID -L $LABEL ${dev}p2
-  udevadm settle; sync; sync
+  mkfs.btrfs -m single -L $LABEL ${dev}p2
+  udevadm settle; sync
 
   ##
   # detach loopback
@@ -731,6 +741,7 @@ while true ; do
   --list-images)      _check && _run list_images ;;
   --mount-raw)        _check && _run mount_raw ;;
   --mount-qcow2)      _check && _run mount_qcow2 ;;
+  -v)                 set -x ;;
   --)                 break ;;
   *)                  usage ;;
   esac
