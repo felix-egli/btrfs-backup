@@ -289,6 +289,7 @@ function _backup()
 
     >&2 echo "differential backup: snapshot=$snap, parent=$parent"
 
+    test -d $backup_dir/snapshots/new || mkdir $backup_dir/snapshots/new
     ssh $host "
       set -eu
       snapshots='/.btrfs/snapshots'
