@@ -47,10 +47,14 @@ function epilogue()
   if [ $rc -ne 0 ] || [ "${SEND_MAIL:-false}" != 'false' ]; then
     test -t 0 || mail "backup $HOST $@ ($rc)" < $out
   fi
+  rm $lockfile
+  cd "$DIR/log/"
+  find btrfs-backup-*-*.out -mtime 7 -delete
   exit $rc
 }
 
-out="$DIR/btrfs-backup.out"
+mkdir -p "$DIR/log/"
+out="$DIR/log/btrfs-backup-$(date +%Y%m%d-%H%M).out"
 
 trap epilogue EXIT
 

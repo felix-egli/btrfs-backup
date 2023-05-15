@@ -10,6 +10,8 @@ host=''
 compress='gzip -3'
 uncompress='gunzip'
 
+btrfs_compression='zstd'
+
 declare -A retention=(
   [latest]=5
   [days]=5
@@ -19,6 +21,8 @@ declare -A retention=(
 )
 
 direct_qcow2=false
+
+lockfile=''
 
 function usage()
 {
@@ -97,6 +101,7 @@ function exit_handler()
     test $rc -ne 0 && echo "${exit_functions[$idx]}"
     eval "${exit_functions[$idx]}"
   done
+  test "$lockfile" && rm $lockfile
   exit $rc
 }
 
@@ -167,6 +172,7 @@ function nbd_umount()
     btrfstune -M $UUID ${NBD}p2
     unset UUID
   }
+  udevadm settle; sync
   qemu-nbd -d ${NBD}
   NBD=''
 }
@@ -257,7 +263,7 @@ function _setup()
   for dir in snapshots snapshots/new retention retention/{latest,days,months,weeks,years} images ; do
     test -d $backup_dir/$dir || mkdir $backup_dir/$dir
   done
-  btrfs property set $backup_dir/snapshots compression zlib
+  btrfs property set $backup_dir/snapshots compression $btrfs_compression
 
   _get_metadata
 }
@@ -409,10 +415,10 @@ function _restore_backup()
 
   if [ $direct_qcow2 == true ]; then
     check_qemu_nbd
-    nbd_mount $image_tmp $mp -o compress=zlib:9
+    nbd_mount $image_tmp $mp -o compress=$btrfs_compression
     exit_push "nbd_umount $mp"
   else
-    lo_mount $image_tmp $mp -o compress=zlib:9
+    lo_mount $image_tmp $mp -o compress=$btrfs_compression
     exit_push "lo_umount $mp"
   fi
 
@@ -477,7 +483,7 @@ function _convert()
   local mp=$(mktemp -d)
   exit_push "rmdir $mp"
 
-  nbd_mount $image_qcow $mp -o compress=zlib:9,subvolid=5
+  nbd_mount $image_qcow $mp -o compress=$btrfs_compression,subvolid=5
   exit_push "nbd_umount $mp"
 
   cd $mp
@@ -584,7 +590,7 @@ function _mount_raw()
   local mp=$(mktemp -d)
   exit_push "rmdir $mp"
 
-  lo_mount $image_raw $mp -o compress=zlib:9,subvolid=5
+  lo_mount $image_raw $mp -o compress=$btrfs_compression,subvolid=5
   exit_push "lo_umount $mp"
 
   cd $mp
@@ -602,7 +608,7 @@ function _mount_qcow2()
 
   check_qemu_nbd
 
-  nbd_mount $image_qcow $mp -o compress=zlib:9,subvolid=5
+  nbd_mount $image_qcow $mp -o compress=$btrfs_compression,subvolid=5
   exit_push "nbd_umount $mp"
 
   cd $mp
@@ -719,6 +725,7 @@ while true ; do
     exec 9> $lockfile
     flock -n 9 || {
       >&2 echo "$lockfile is locked"
+      unset lockfile
       exit 1
     }
     shift
