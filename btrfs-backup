@@ -9,6 +9,9 @@ backup_dir=''
 host=''
 compress='gzip -3'
 uncompress='gunzip'
+rootfs='@'
+rootdev='sda'
+rootpart='2'
 
 btrfs_compression='zstd'
 
@@ -30,27 +33,30 @@ function usage()
 Usage: $COMMAND --backup-dir=DIR --host=HOST [optional] operation..
 
 Required:
-  --backup-dir=DIR  Directory where backups are saved.
-  --host=HOST       Host to backup.
+  --backup-dir=DIR    Directory where backups are saved.
+  --host=HOST         Host to backup.
 
 Optional:
-  --latest=COUNT    Number of latest snapshots to keep.
-  --days=DAYS       Number of days to keep.
-  --weeks=WEEKS     Number of weeks to keep.
-  --months=MONTHS   Number of months to keep.
-  --years=YEARS     Number of years to keep.
+  --rootfs=ROOTFS     Subvolume name of the rootfs
+  --rootdev=ROOTDEV   Block device of rootfs
+  --rootpart=ROOTPART Partrition of rootfs
+  --latest=COUNT      Number of latest snapshots to keep.
+  --days=DAYS         Number of days to keep.
+  --weeks=WEEKS       Number of weeks to keep.
+  --months=MONTHS     Number of months to keep.
+  --years=YEARS       Number of years to keep.
 
 Operation:
-  --setup           Setup the directory structure in the backup directory.
-  --backup          Perform a backup operation.
-  --retention       Perform a retention operation.
-  --create-image    Create a QCOW2 image from scratch.
-  --update-image    Update the RAW image with the latest backup and create a
-                    QCOW2 image.
-  --clone-image     Clone the RAW image into a QCOW2 image.
-  --list-images     List the images.
-  --mount-raw       Mount the RAW image.
-  --mount-qcow2     Mount the QCOW2 image.
+  --setup             Setup the directory structure in the backup directory.
+  --backup            Perform a backup operation.
+  --retention         Perform a retention operation.
+  --create-image      Create a QCOW2 image from scratch.
+  --update-image      Update the RAW image with the latest backup and create a
+                      QCOW2 image.
+  --clone-image       Clone the RAW image into a QCOW2 image.
+  --list-images       List the images.
+  --mount-raw         Mount the RAW image.
+  --mount-qcow2       Mount the QCOW2 image.
 
 
 Current parameters:
@@ -81,7 +87,7 @@ test $# -gt 0
 
 PARAMETERS=$(
   getopt -o 'hB:H:sbriucv' \
-    --long 'help,backup-dir:,host:,\
+    --long 'help,backup-dir:,host:,rootfs:,rootdev:,rootpart:,\
 setup,backup,retention,create-image,update-image,clone-image,mount-raw,mount-qcow2,\
 latest:,days:,weeks:,months:,years:,direct-qcow2,list-images' \
     -n 'btrfs_backup' -- "$@"
@@ -161,7 +167,7 @@ function nbd_mount()
   qemu-nbd -n --fork --persistent -v -c ${NBD} -f qcow2 $1
   shift
   udevadm settle; sync
-  mount -t btrfs ${NBD}p2 $@
+  mount -t btrfs ${NBD}p$rootpart $@
 }
 
 function nbd_umount()
@@ -169,7 +175,7 @@ function nbd_umount()
   cd $HOME
   umount $@
   test "${UUID:-}" && {
-    btrfstune -M $UUID ${NBD}p2
+    btrfstune -M $UUID ${NBD}p$rootpart
     unset UUID
   }
   udevadm settle; sync
@@ -182,7 +188,7 @@ function lo_mount()
   DEV=$(losetup --partscan --find --show $1)
   shift
   udevadm settle; sync
-  mount -t btrfs ${DEV}p2 $@ || {
+  mount -t btrfs ${DEV}p$rootpart $@ || {
     losetup -d $DEV
     exit 1
   }
@@ -193,7 +199,7 @@ function lo_umount()
   cd $HOME
   umount $@
   test "${UUID:-}" && {
-    btrfstune -M $UUID ${DEV}p2
+    btrfstune -M $UUID ${DEV}p$rootpart
     unset UUID
   }
   losetup -d ${DEV}
@@ -224,19 +230,19 @@ function _get_metadata()
   tmp=$(basename $tmp)
 
   >&2 echo "- fdisk-l"
-  ssh $host 'LANG=C; fdisk -l /dev/sda' > $tmp
+  ssh $host "LANG=C; fdisk -l /dev/${rootdev}" > $tmp
   tar --file=$metatmp --create --transform="s:$tmp:fdisk-l:" $tmp
 
   >&2 echo "- sgdisk-backup"
-  ssh $host 'bkup=$(mktemp) && sgdisk --backup=$bkup /dev/sda >/dev/null 2>&1 && cat $bkup' > $tmp
+  ssh $host 'bkup=$(mktemp) && sgdisk --backup=$bkup /dev/'${rootdev}' >/dev/null 2>&1 && cat $bkup' > $tmp
   tar --file=$metatmp --append --transform="s:$tmp:sgdisk-backup:" $tmp
 
   >&2 echo "- part1-img"
-  ssh $host 'dd if=/dev/sda1 bs=512 2>/dev/null' > $tmp
+  ssh $host "dd if=/dev/${rootdev}1 bs=512 2>/dev/null" > $tmp
   tar --file=$metatmp --append --transform="s:$tmp:part1-img:" $tmp
 
   >&2 echo "- super-dump"
-  ssh $host 'btrfs inspect-internal dump-super /dev/sda2' > $tmp
+  ssh $host "btrfs inspect-internal dump-super /dev/${rootdev}$rootpart" > $tmp
   tar --file=$metatmp --append --transform="s:$tmp:super-dump:" $tmp
 
   >&2 echo "- fstab"
@@ -359,7 +365,7 @@ function _init_image()
   ##
   # install MBR
   #
-  # ssh $SYSTEM 'dd if=/dev/sda bs=512 count=2048' > $tmp
+  # ssh $SYSTEM "dd if=/dev/${rootdev} bs=512 count=2048" > $tmp
   # dd if=$tmp of=${dev} bs=512 conv=notrunc
   # sgdisk --clear ${dev} > /dev/null 2>&1
   # udevadm settle; sync
@@ -392,7 +398,7 @@ function _init_image()
   ##
   # create fs
   #
-  mkfs.btrfs -m single -L $LABEL ${dev}p2
+  mkfs.btrfs -m single -L $LABEL ${dev}p$rootpart
   udevadm settle; sync
 
   ##
@@ -488,20 +494,20 @@ function _convert()
 
   cd $mp
 
-  test -d @ || {
+  test -d $rootfs || {
     ##
-    # create the snapshot @ of the latest shapshot
+    # create the snapshot $rootfs of the latest shapshot
     #
     snap=$(cd snapshots && ls -d *.*.*_*.* | tail -n1)
     btrfs property set snapshots/$snap ro false
-    btrfs subvolume snap snapshots/$snap @
+    btrfs subvolume snap snapshots/$snap $rootfs
     btrfs property set snapshots/$snap ro true
   }
 
-  btrfs subvolume set-default @
+  btrfs subvolume set-default $rootfs
 
   subvolumes=$(
-    cat @/etc/fstab \
+    cat $rootfs/etc/fstab \
     | grep ',subvol=@' \
     | grep -v '^#' \
     | sed -r 's/.*subvol=(@[a-z]+).*/\1/'
@@ -516,7 +522,7 @@ function _convert()
     btrfs property set @swap compression none
   }
 
-  cd @
+  cd $rootfs
 
   ##
   # make sure that files in boot are compressed with zlib
@@ -528,7 +534,9 @@ function _convert()
   ##
   # disable swap
   #
-  sed -i -r 's:^(/swap/.*):# \1:' etc/fstab
+  sed -i -r \
+    's:^(^.*[[:blank:]]+none[[:blank:]]+swap[[:blank:]]+sw.*):# \1:' \
+    etc/fstab
 
   cd $HOME
 
@@ -732,6 +740,18 @@ while true ; do
     ;;
   -H|--host)
     host=$2
+    shift
+    ;;
+  --rootfs)
+    rootfs=$2
+    shift
+    ;;
+  --rootdev)
+    rootdev=$2
+    shift
+    ;;
+  --rootpart)
+    rootpart=$2
     shift
     ;;
   --latest)           (( retention[latest] = $2 )) ; shift ;;

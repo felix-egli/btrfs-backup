@@ -49,7 +49,9 @@ function epilogue()
   fi
   rm $lockfile
   cd "$DIR/log/"
-  find btrfs-backup-*-*.out -mtime 7 -delete
+  if [ ! -t 0 ]; then
+    find btrfs-backup-*-*.out -mtime 7 -delete
+  fi
   exit $rc
 }
 

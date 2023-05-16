@@ -43,11 +43,11 @@ NBD=$(get_nbd)
 qemu-nbd -c $NBD $IMAGE
 udevadm settle; sync
 
-mount ${NBD}p2 $MP -o subvol=@
+mount ${NBD}p3 $MP -o subvol=@rootfs
 
 trap '
 cd /tmp
-umount ${NBD}p2
+umount ${NBD}p3
 qemu-nbd -d $NBD
 ' EXIT
 
@@ -71,8 +71,9 @@ echo 'root:root' | chpasswd
 cd /etc
 mv resolv.conf{,.save}
 cat - <<EORC > resolv.conf
-domain raumfahrtingenieure.ch
+nameserver 192.168.9.1
 nameserver 192.168.9.4
+nameserver 192.168.9.17
 EORC
 
 EOF
