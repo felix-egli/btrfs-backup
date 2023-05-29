@@ -517,10 +517,13 @@ function _convert()
   )
 
   for sub in $subvolumes ; do
-    test -d $sub || btrfs subvolume create $sub
+    test -d $sub || {
+      btrfs subvolume create $sub
+    }
   done
 
-  test -d @swap || {
+  test -d @swap && {
+    echo "setup @swap"
     chattr +C @swap
     btrfs property set @swap compression none
   }
