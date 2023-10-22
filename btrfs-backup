@@ -282,17 +282,21 @@ function _backup()
   local dir
   local snap=$(date +%Y.%m.%d_%H.%M)
   local parent=''
+  local snapshots='/.btrfs/snapshots'
+
+  local list=$(mktemp)
+  exit_push "rm $list"
+
+  ssh $host "cd $snapshots && ls -d *.*.*_*.* 2> /dev/null" > $list
 
   cd $backup_dir/snapshots
   for dir in $(ls -d *.*.*_*.* 2> /dev/null) ; do
-    test $(btrfs property get $dir ro) == 'ro=true' && parent=$dir
+    test $(btrfs property get $dir ro) == 'ro=true' && {
+      # check if parent exists
+      egrep -q "^${dir}\$" $list && parent=$dir
+    }
   done
   cd $OLDPWD
-
-  snapshots='/.btrfs/snapshots'
-
-  # check if parent exists
-  ssh $host "test -d $snapshots/$parent" || parent=''
 
   if [ -z "$parent" ]; then
 
@@ -302,7 +306,7 @@ function _backup()
       set -eu
       btrfs subvolume snapshot -r / $snapshots/$snap >&2
       btrfs send $snapshots/$snap | $compress
-    " | $uncompress | btrfs receive $backup_dir/snapshots
+    " | $uncompress | btrfs receive $backup_dir/snapshots/new
 
   else
 
@@ -315,16 +319,18 @@ function _backup()
       btrfs send -p $snapshots/$parent $snapshots/$snap | $compress
     " | $uncompress | btrfs receive $backup_dir/snapshots/new
 
-    ##
-    # move snapshot
-    #
-    btrfs property set $backup_dir/snapshots/new/$snap ro false
-    mv $backup_dir/snapshots/new/$snap $backup_dir/snapshots/$snap
-    btrfs property set $backup_dir/snapshots/$snap ro true
-
   fi
 
+  ##
+  # move snapshot
+  #
+  btrfs property set $backup_dir/snapshots/new/$snap ro false
+  mv $backup_dir/snapshots/new/$snap $backup_dir/snapshots/$snap
+  btrfs property set $backup_dir/snapshots/$snap ro true
+
   _get_metadata
+
+  exit_pop
 }
 
 function _init_image()
