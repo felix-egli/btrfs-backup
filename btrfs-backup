@@ -324,7 +324,7 @@ function _backup()
   ##
   # move snapshot
   #
-  btrfs property set $backup_dir/snapshots/new/$snap ro false
+  btrfs property set -f $backup_dir/snapshots/new/$snap ro false
   mv $backup_dir/snapshots/new/$snap $backup_dir/snapshots/$snap
   btrfs property set $backup_dir/snapshots/$snap ro true
 
