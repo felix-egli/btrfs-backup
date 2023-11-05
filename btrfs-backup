@@ -324,9 +324,8 @@ function _backup()
   ##
   # move snapshot
   #
-  btrfs property set -f $backup_dir/snapshots/new/$snap ro false
-  mv $backup_dir/snapshots/new/$snap $backup_dir/snapshots/$snap
-  btrfs property set $backup_dir/snapshots/$snap ro true
+  btrfs subvolume snapshot -r $backup_dir/snapshots/new/$snap $backup_dir/snapshots/$snap
+  btrfs subvolume delete $backup_dir/snapshots/new/$snap
 
   _get_metadata
 
