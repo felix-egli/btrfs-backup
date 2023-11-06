@@ -510,9 +510,9 @@ function _convert()
     # create the snapshot $rootfs of the latest shapshot
     #
     snap=$(cd snapshots && ls -d *.*.*_*.* | tail -n1)
-    btrfs property set snapshots/$snap ro false
+    ### btrfs property set snapshots/$snap ro false
     btrfs subvolume snap snapshots/$snap $rootfs
-    btrfs property set snapshots/$snap ro true
+    ### btrfs property set snapshots/$snap ro true
   }
 
   btrfs subvolume set-default $rootfs
@@ -533,7 +533,7 @@ function _convert()
   test -d @swap && {
     echo "setup @swap"
     chattr +C @swap
-    btrfs property set @swap compression none
+    ### btrfs property set @swap compression none
   }
 
   cd $rootfs

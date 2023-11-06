@@ -66,6 +66,8 @@ fi
 
 title "$HOST $@"
 
+set -x
+
 $SCRIPTDIR/btrfs-backup --backup-dir=$DIR --host=$HOST $@
 
 exit 0
