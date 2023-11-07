@@ -166,16 +166,26 @@ function get_nbd()
 
 function nbd_mount()
 {
+  echo "nbd_mount $@"
   NBD=$(get_nbd)
   qemu-nbd -n --fork --persistent -v -c ${NBD} -f qcow2 $1
   shift
   udevadm settle; sync
+  fdisk -l $NBD
+  test -b ${NBD}p$rootpart || {
+    echo "${NBD}p$rootpart is not a block device"
+    qemu-nbd -d ${NBD}
+    exit 1
+  }
+  echo "mount -t btrfs ${NBD}p$rootpart $@"
   mount -t btrfs ${NBD}p$rootpart $@
 }
 
 function nbd_umount()
 {
+  echo "nbd_umount $@"
   cd $HOME
+  echo "umount $@"
   umount $@
   test "${UUID:-}" && {
     btrfstune -M $UUID ${NBD}p$rootpart
@@ -616,6 +626,7 @@ function _mount_raw()
   exit_push "lo_umount $mp"
 
   cd $mp
+  echo "Entering shell..."
   bash
   cd $HOME
 
@@ -634,6 +645,7 @@ function _mount_qcow2()
   exit_push "nbd_umount $mp"
 
   cd $mp
+  echo "Entering shell..."
   bash
   cd $HOME
 
