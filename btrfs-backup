@@ -247,7 +247,11 @@ function _get_metadata()
   tar --file=$metatmp --create --transform="s:$tmp:fdisk-l:" $tmp
 
   >&2 echo "- sgdisk-backup"
-  ssh $host 'bkup=$(mktemp) && sgdisk --backup=$bkup /dev/'${rootdev}' >/dev/null 2>&1 && cat $bkup' > $tmp
+  ssh $host '
+    bkup=$(mktemp) \
+    && sgdisk --backup=$bkup /dev/'${rootdev}' >/dev/null 2>&1 \
+    && cat $bkup \
+    && rm $bkup >/dev/null 2>&1' > $tmp
   tar --file=$metatmp --append --transform="s:$tmp:sgdisk-backup:" $tmp
 
   >&2 echo "- part1-img"
