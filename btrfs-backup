@@ -177,6 +177,7 @@ function nbd_mount()
     qemu-nbd -d ${NBD}
     exit 1
   }
+  systemctl daemon-reload
   echo "mount -t btrfs ${NBD}p$rootpart $@"
   mount -t btrfs ${NBD}p$rootpart $@
 }
@@ -201,6 +202,7 @@ function lo_mount()
   DEV=$(losetup --partscan --find --show $1)
   shift
   udevadm settle; sync
+  systemctl daemon-reload
   mount -t btrfs ${DEV}p$rootpart $@ || {
     losetup -d $DEV
     exit 1
@@ -423,7 +425,7 @@ function _init_image()
   ##
   # create fs
   #
-  mkfs.btrfs -m single -L $LABEL ${dev}p$rootpart
+  mkfs.btrfs --quiet -m single -L $LABEL ${dev}p$rootpart
   udevadm settle; sync
 
   ##
