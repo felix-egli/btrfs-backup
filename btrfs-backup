@@ -425,7 +425,7 @@ function _init_image()
   ##
   # create fs
   #
-  mkfs.btrfs --quiet -m single -L $LABEL ${dev}p$rootpart
+  mkfs.btrfs -m single -L $LABEL ${dev}p$rootpart
   udevadm settle; sync
 
   ##
