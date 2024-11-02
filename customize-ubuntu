@@ -10,7 +10,7 @@ function usage()
   exit 1
 }
 
-test $# -eq 1 || usage
+test $# -eq 2 || usage
 test -f $1 || usage
 test -s $1 || usage
 test -x $2 || usage
