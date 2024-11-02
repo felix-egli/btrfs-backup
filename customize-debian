@@ -6,15 +6,17 @@ SCRIPT=$0
 
 function usage()
 {
-  echo "$SCRIPT IMAGE"
+  echo "$SCRIPT IMAGE SCRIPT"
   exit 1
 }
 
-test $# -eq 1 || usage
+test $# -eq 2 || usage
 test -f $1 || usage
 test -s $1 || usage
+test -x $2 || usage
 
 IMAGE=$1
+SCRIPT=$2
 
 set -x
 
@@ -53,6 +55,9 @@ qemu-nbd -d $NBD
 
 chattr -R -c $MP/boot
 
+cd $MP
+$SCRIPT
+
 chroot $MP /bin/bash <<EOF
 set -exu
 
@@ -72,8 +77,8 @@ cd /etc
 mv resolv.conf{,.save}
 cat - <<EORC > resolv.conf
 nameserver 192.168.9.1
+nameserver 192.168.9.6
 nameserver 192.168.9.4
-nameserver 192.168.9.17
 EORC
 
 EOF

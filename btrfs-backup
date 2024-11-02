@@ -164,17 +164,32 @@ function get_nbd()
   )
 }
 
+function nbd_detach()
+{
+  echo "nbd_detach $@"
+  qemu-nbd -d $1
+  udevadm settle; sync
+  sleep 5
+}
+
 function nbd_mount()
 {
   echo "nbd_mount $@"
-  NBD=$(get_nbd)
-  qemu-nbd -n --fork --persistent -v -c ${NBD} -f qcow2 $1
+
+  local retry=5
+  while [ $retry -gt 0 ]; do
+    udevadm settle; sync
+    NBD=$(get_nbd)
+    qemu-nbd -n --fork --persistent -v -c ${NBD} -f qcow2 $1
+    sleep 5
+    udevadm settle; sync
+    fdisk -l $NBD && break
+    : $((retry--))
+  done
   shift
-  udevadm settle; sync
-  fdisk -l $NBD
   test -b ${NBD}p$rootpart || {
     echo "${NBD}p$rootpart is not a block device"
-    qemu-nbd -d ${NBD}
+    nbd_detach ${NBD}
     exit 1
   }
   systemctl daemon-reload
@@ -193,7 +208,7 @@ function nbd_umount()
     unset UUID
   }
   udevadm settle; sync
-  qemu-nbd -d ${NBD}
+  nbd_detach ${NBD}
   NBD=''
 }
 
@@ -233,6 +248,8 @@ function _check()
 
 function _get_metadata()
 {
+  echo "_get_metadata $@"
+
   local tmp=$(mktemp)
   exit_push "rm $tmp"
 
@@ -278,6 +295,8 @@ function _get_metadata()
 
 function _setup()
 {
+  echo "_setup $@"
+
   local dir
 
   apt-get install -y gdisk btrfs-progs qemu-utils 
@@ -295,6 +314,8 @@ function _setup()
 
 function _backup()
 {
+  echo "_backup $@"
+
   local dir
   local snap=$(date +%Y.%m.%d_%H.%M)
   local parent=''
@@ -350,6 +371,8 @@ function _backup()
 
 function _init_image()
 {
+  echo "_init_image $@"
+
   local image_tmp=$1
 
   local tmp=$(mktemp)
@@ -375,7 +398,7 @@ function _init_image()
     NBD=$(get_nbd)
     local dev=$NBD
     qemu-nbd -c ${NBD} $image_tmp
-    exit_push "qemu-nbd -d ${NBD}"
+    exit_push "nbd_detach ${NBD}"
   else
     truncate -s $bytes $image_tmp
     udevadm settle; sync
@@ -438,6 +461,8 @@ function _init_image()
 
 function _restore_backup()
 {
+  echo "_restore_backup $@"
+
   local image_tmp=$1
   local parent=''
   local dir
@@ -498,6 +523,8 @@ function _restore_backup()
 
 function _convert()
 {
+  echo "_convert $@"
+
   local snap
   local sub
 
@@ -580,6 +607,8 @@ function _convert()
 
 function _create_image()
 {
+  echo "_create_image $@"
+
   local updated=0
 
   if [ $direct_qcow2 == true ]; then
@@ -600,6 +629,8 @@ function _create_image()
 
 function _update_image()
 {
+  echo "_update_image $@"
+
   local updated=0
 
   if [ $direct_qcow2 == true ]; then
@@ -615,6 +646,8 @@ function _update_image()
 
 function _clone_image()
 {
+  echo "_clone_image $@"
+
   #
   # if the option --direct-qcow2 was given, then this does not clone any 
   # image, but perform the setup.
@@ -625,6 +658,8 @@ function _clone_image()
 
 function _mount_raw()
 {
+  echo "_mount_raw $@"
+
   local mp=$(mktemp -d)
   exit_push "rmdir $mp"
 
@@ -642,6 +677,8 @@ function _mount_raw()
 
 function _mount_qcow2()
 {
+  echo "_mount_qcow2 $@"
+
   local mp=$(mktemp -d)
   exit_push "rmdir $mp"
 
