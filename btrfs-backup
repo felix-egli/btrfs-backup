@@ -324,10 +324,10 @@ function _backup()
   local list=$(mktemp)
   exit_push "rm $list"
 
-  ssh $host "cd $snapshots && ls -d *.*.*_*.* 2> /dev/null" > $list
+  ssh $host "cd $snapshots && ls -d *.*.*_*.* 2> /dev/null || true" > $list
 
   cd $backup_dir/snapshots
-  for dir in $(ls -d *.*.*_*.* 2> /dev/null) ; do
+  for dir in $(ls -d *.*.*_*.* 2> /dev/null || true) ; do
     test $(btrfs property get $dir ro) == 'ro=true' && {
       # check if parent exists
       egrep -q "^${dir}\$" $list && parent=$dir
