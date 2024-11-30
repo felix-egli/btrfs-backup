@@ -564,7 +564,7 @@ function _convert()
     cat $rootfs/etc/fstab \
     | grep ',subvol=@' \
     | grep -v '^#' \
-    | sed -r 's/.*subvol=(@[a-z]+).*/\1/'
+    | sed -r 's/.*subvol=(@[a-z0-9]+).*/\1/'
   )
 
   for sub in $subvolumes ; do
