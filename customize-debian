@@ -6,17 +6,18 @@ SCRIPT=$0
 
 function usage()
 {
-  echo "$SCRIPT IMAGE SCRIPT"
+  echo "$SCRIPT IMAGE PART SCRIPT"
   exit 1
 }
 
-test $# -eq 2 || usage
+test $# -eq 3 || usage
 test -f $1 || usage
 test -s $1 || usage
-test -x $2 || usage
+test -x $3 || usage
 
 IMAGE=$1
-SCRIPT=$2
+PART=$2
+SCRIPT=$3
 
 set -x
 
@@ -45,11 +46,11 @@ NBD=$(get_nbd)
 qemu-nbd -c $NBD $IMAGE
 udevadm settle; sync
 
-mount ${NBD}p3 $MP -o subvol=@rootfs
+mount ${NBD}p${PART} $MP -o subvol=@rootfs
 
 trap '
 cd /tmp
-umount ${NBD}p3
+umount ${NBD}p${PART}
 qemu-nbd -d $NBD
 ' EXIT
 
@@ -80,6 +81,8 @@ nameserver 192.168.9.1
 nameserver 192.168.9.6
 nameserver 192.168.9.4
 EORC
+
+hostnamectl set-hostname `hostnamectl hostname`-nuc
 
 EOF
 
